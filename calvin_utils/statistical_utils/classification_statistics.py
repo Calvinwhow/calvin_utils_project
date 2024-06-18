@@ -1,5 +1,5 @@
 from sklearn.metrics import accuracy_score, auc, roc_curve, accuracy_score, confusion_matrix, precision_recall_fscore_support
-from calvin_utils.statistical_utils.distribution_statistics import bootstrap_distribution_statistics
+from calvin_utils_project.statistical_utils.distribution_statistics import bootstrap_distribution_statistics
 from math import pi
 
 import os 

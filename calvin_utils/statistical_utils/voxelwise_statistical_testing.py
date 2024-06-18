@@ -16,7 +16,7 @@ import pandas as pd
 import nibabel as nib
 from nimlab import datasets as nimds
 
-from calvin_utils.nifti_utils.matrix_utilities import unmask_matrix, mask_matrix
+from calvin_utils_project.nifti_utils.matrix_utilities import unmask_matrix, mask_matrix
 from sklearn.linear_model import LinearRegression
 
 

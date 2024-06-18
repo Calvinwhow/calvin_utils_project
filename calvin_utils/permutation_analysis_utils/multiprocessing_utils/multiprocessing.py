@@ -4,7 +4,7 @@ import statsmodels.formula.api as smf
 import concurrent
 from tqdm import tqdm
 import numpy as np
-from calvin_utils.permutation_analysis_utils.perform_permutation import vector_column_permutation
+from calvin_utils_project.permutation_analysis_utils.perform_permutation import vector_column_permutation
 from nimlab import datasets as nimds
 import pandas as pd
 

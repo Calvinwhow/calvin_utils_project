@@ -4,8 +4,8 @@ from tqdm import tqdm
 from statsmodels.formula.api import ols
 import os
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from calvin_utils.statistical_utils.voxelwise_statistical_testing import voxelwise_mediated_moderation_analysis
-from calvin_utils.permutation_analysis_utils.permutation_utils.palm import permute_column
+from calvin_utils_project.statistical_utils.voxelwise_statistical_testing import voxelwise_mediated_moderation_analysis
+from calvin_utils_project.permutation_analysis_utils.permutation_utils.palm import permute_column
 
 if __name__ == "__main__":
     

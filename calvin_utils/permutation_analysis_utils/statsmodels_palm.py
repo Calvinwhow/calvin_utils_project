@@ -1,4 +1,4 @@
-from calvin_utils.permutation_analysis_utils.palm_utils import CalvinPalm
+from calvin_utils_project.permutation_analysis_utils.palm_utils import CalvinPalm
 import patsy
 import seaborn as sns
 import matplotlib.pyplot as plt

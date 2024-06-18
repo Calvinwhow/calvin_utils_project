@@ -28,7 +28,7 @@ import os
 import subprocess
 import numpy as np
 import patsy
-from calvin_utils.file_utils.dataframe_utilities import preprocess_colnames_for_regression
+from calvin_utils_project.file_utils.dataframe_utilities import preprocess_colnames_for_regression
 
 from nilearn import image
 from nimlab import datasets as nimds

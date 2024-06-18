@@ -3,8 +3,8 @@ import pandas as pd
 from tqdm import tqdm
 import nibabel as nib
 from typing import Tuple
-from sklearn.linear_model import LinearRegression
-from calvin_utils.nifti_utils.generate_nifti import view_and_save_nifti
+from scipy.stats import rankdata
+from calvin_utils_project.nifti_utils.generate_nifti import view_and_save_nifti
 
 class CalvinFWEMap():
     """
@@ -15,8 +15,13 @@ class CalvinFWEMap():
     ------
     - Running max_stat_method = pseudo_var_smooth will reduce the risk of the maximum stat
         being a numerically unstable result of a bad permutation.
-    - Linear regression is implemented using sklearn's LinearRegression, allowing for efficient 
-        and vectorized computations across large datasets.
+    - SpearmanR implemented by Scipy requires looping over every voxel.
+        However, it is more statistically powerful than the vectorized projection
+        due to their more sophisticated ranking (which is too intensive for vectorization).
+    - PearsonR does not suffer from the same issues as the SpearmanR. 
+        However, you may then consider simply using the linear regression counterpart of this code. 
+    - The vectorized implementation of Spearman correlation handles large matrices efficiently
+        using broadcasting but may not handle ties as accurately as Scipy's implementation.
     
     Attributes:
     -----------
@@ -24,6 +29,8 @@ class CalvinFWEMap():
         DataFrame with neuroimaging data where each column represents a subject and each row represents a voxel.
     variable_dataframe : pd.DataFrame
         DataFrame where each column represents a subject and each row represents the variable to regress upon.
+    method : str
+        The association method to relate the voxelwise data to. Defaults to 'spearman'. Options: 'spearman' | 'pearson'.
     mask_path : str or None
         The path to the mask to use. If None, will threshold the voxelwise image itself by mask_threshold.
     mask_threshold : float
@@ -55,17 +62,23 @@ class CalvinFWEMap():
     permute_covariates() -> pd.DataFrame
         Permutes the patient data by randomly assigning patient data to new patients.
     
-    run_lin_reg(X: np.ndarray, Y: np.ndarray, use_intercept: bool=True, debug: bool=False) -> pd.DataFrame
-        Calculates voxelwise relationship to Y variable with linear regression using sklearn's LinearRegression.
+    efficient_rankdata(arr: np.ndarray, axis: int = 0) -> np.ndarray
+        Efficiently ranks data using numpy.
     
-    orchestrate_linear_regression(permuted_variable_df: pd.DataFrame=None, debug: bool=False) -> pd.DataFrame
-        Orchestrates the linear regression analysis for voxelwise data.
+    run_spearman(X: np.array, Y: np.array, debug: bool = False) -> pd.DataFrame
+        Calculates voxelwise relationship to Y variable with Spearman correlation.
+    
+    run_pearson(X: np.array, Y: np.array, debug: bool = False) -> pd.DataFrame
+        Calculates voxelwise relationship to Y variable with Pearson correlation.
+    
+    correlation(permuted_variable_df: pd.DataFrame=None, debug: bool=False) -> pd.DataFrame
+        Calculates voxelwise relationship to Y variable with the specified correlation method.
     
     var_smooth(df: pd.DataFrame)
         Takes the 95th percentile of the permuted data as the 'maximum stat' as a proxy for variance smoothed max stat.
     
     pseudo_var_smooth(df: pd.DataFrame) -> np.ndarray
-        Takes the 99th percentile of the permuted data as the 'maximum stat' as a proxy for variance smoothed max stat.
+        Takes the 95th percentile of the permuted data as the 'maximum stat' as a proxy for variance smoothed max stat.
     
     raw_max_stat(df: pd.DataFrame) -> float
         Returns the max statistic in the data.
@@ -88,7 +101,7 @@ class CalvinFWEMap():
     run(n_permutations: int=100, debug: bool=False)
         Orchestration method to run the entire analysis and save the results.
     """
-    def __init__(self, neuroimaging_dataframe: pd.DataFrame, variable_dataframe: pd.DataFrame, mask_path=None, mask_threshold: int=0.0, out_dir='', max_stat_method=None, vectorize=True):
+    def __init__(self, neuroimaging_dataframe: pd.DataFrame, variable_dataframe: pd.DataFrame, method: str='spearman', mask_path=None, mask_threshold: int=0.0, out_dir='', max_stat_method=None, vectorize=True):
         """
         Need to provide the dataframe dictionaries and dataframes of importance. 
         
@@ -97,10 +110,13 @@ class CalvinFWEMap():
                                         and each row represents a voxel.
         - variable_dataframe (pd.DataFrame): DataFrame where each column represents represents a subject,
                                         and each row represents the variable to regress upon. 
+        - method (str): the association method to relate the voxelwise data to. Defaults to spearman correlation
+                                        options: spearman | pearson
         - mask_path (str): the path to the mask you want to use. 
                                         If None, will threshold the voxelwise image itself by mask_threshold.
         - mask_threshold (int): The threshold to mask the neuroimaging data at.
         """
+        self.method = method
         self.mask_path = mask_path
         self.mask_threshold = mask_threshold
         self.out_dir = out_dir
@@ -109,7 +125,6 @@ class CalvinFWEMap():
         neuroimaging_dataframe, self.variable_dataframe = self.sort_dataframes(covariate_df=variable_dataframe, voxel_df=neuroimaging_dataframe)
         self.original_mask, self.nonzero_mask, self.neuroimaging_dataframe = self.mask_dataframe(neuroimaging_dataframe)
 
-        
     def sort_dataframes(self, voxel_df: pd.DataFrame, covariate_df: pd.DataFrame, debug: bool=False) -> Tuple[pd.DataFrame, pd.DataFrame]:
         """
         Will sort the rows of the voxelwise DF and the covariate DF to make sure they are identically organized.
@@ -216,38 +231,127 @@ class CalvinFWEMap():
         """Permute the patient data by randomly assigning patient data (columnar data) to new patients (columns)"""
         return self.variable_dataframe.sample(frac=1, axis=1, random_state=None)
     
-    def run_lin_reg(self, X, Y, use_intercept: bool=True, debug: bool=False):
-        # Fit model on control data across all voxels
-        model = LinearRegression(fit_intercept=use_intercept)
-        model.fit(X, Y)
-        
-        # Predict on experimental group and calculate R-squared
-        Y_HAT = model.predict(X)
-        Y_BAR = np.mean(Y, axis=0, keepdims=True)
-        SSE = np.sum( (Y_HAT - Y_BAR)**2, axis=0)
-        SST = np.sum( (Y     - Y_BAR)**2, axis=0)
-        R2 = SSE/SST
- 
-        if debug:
-            print(X.shape, Y.shape, Y_HAT.shape, Y_BAR.shape, SSE.shape, SST.shape, R2.shape)
-            print('Observed R2 max: ', np.max(R2))
-            
-        # Reshape R2 to DataFrame format
-        return pd.DataFrame(R2.T, index=self.neuroimaging_dataframe.index, columns=['R2'])
-    
-    def orchestrate_linear_regression(self, permuted_variable_df: pd.DataFrame=None, debug: bool=False) -> pd.DataFrame:
+    def efficient_rankdata(self, arr, axis=0):
         """
-        Calculate voxelwise relationship to Y variable with linear regression.
-        It is STRONGLY advised to set mask=True when running this.
-
-        This function performs a linear regression using sklearn's LinearRegression
-        The regression is done once across all voxels simultaneously, 
-        treating each voxel's values across subjects as independent responses. 
-        This vectorized approach efficiently handles the calculations by leveraging matrix operations, 
-        which are computationally optimized in libraries like numpy and sklearn.
+        Efficiently rank data using numpy.
+        
+        Args:
+            arr (np.ndarray): Array to be ranked.
+            axis (int): Axis along which to rank the data.
+        
+        Returns:
+            np.ndarray: Ranked data.
+        """
+        arr = np.asarray(arr)
+        ranks = np.empty_like(arr, dtype=float)
+        if axis == 0:
+            sorter = np.argsort(arr, axis=axis)
+            ranks[sorter, np.arange(arr.shape[1])] = np.arange(arr.shape[0])[:, np.newaxis] + 1
+        else:
+            sorter = np.argsort(arr, axis=axis)
+            ranks[np.arange(arr.shape[0])[:, np.newaxis], sorter] = np.arange(arr.shape[1]) + 1
+        return ranks
+    
+    def run_spearman(self, X: np.array, Y: np.array, debug: bool = False) -> pd.DataFrame:
+        """
+        Calculate voxelwise relationship to Y variable with Spearman correlation.
 
         Args:
-            use_intercept (bool): if true, will add intercept to the regression
+            X (pd.DataFrame): DataFrame of independent variables (e.g., patients x variables).
+            Y (pd.DataFrame): DataFrame of dependent variables (e.g., patients x voxels).
+            debug (bool): If true, prints out summary metrics.
+
+        Returns:
+            pd.DataFrame: DataFrame of correlation coefficients.
+        """
+        if not self.vectorize:
+            from scipy.stats import spearmanr
+            #Initialize
+            n_voxels = Y.shape[1]
+            rho = np.zeros(n_voxels)
+            
+            # Iterate over each voxel
+            for i in range(n_voxels):
+                rho[i], _ = spearmanr(X, Y[:, i])
+                
+            if debug:
+                print("X: ", X.shape, " Y: ", Y.shape)
+                print('Spearman correlation matrix shape: ', rho.shape)
+
+            r_df = pd.DataFrame(rho, index=np.arange(n_voxels), columns=['rho'])
+        else:
+            # Rank the data
+            X_ranked = self.efficient_rankdata(X, axis=0)
+            Y_ranked = self.efficient_rankdata(Y, axis=0)
+
+            if X_ranked.shape[0] != Y_ranked.shape[0]:
+                raise ValueError(f"The number of rows in X ({X_ranked.shape}) must match the number of rows in Y ({Y_ranked.shape}).")
+
+            # Calculate differences in ranks
+            D = np.square(X_ranked - Y_ranked)
+
+            # Sum the squared differences across patients
+            SIGMA_D = np.sum(D, axis=0)
+
+            # Calculate Spearman correlation
+            N = X_ranked.shape[0]
+            rho = 1 - ( (6 * SIGMA_D) / (N * (N**2 - 1)) )
+            if debug:
+                print("X: ", X.shape, " Y: ", Y.shape, " X_ranked: ", X_ranked.shape, " Y_ranked: ", Y_ranked.shape)
+                print("D: ", D.shape, " SIGMA_D: ", SIGMA_D.shape)
+                print('Spearman correlation matrix shape: ', rho.shape)
+
+            # Reshape R to DataFrame format
+            r_df = pd.DataFrame(rho.T, index=self.neuroimaging_dataframe.index, columns=['rho'])
+        return r_df
+    
+    def run_pearson(self, X: np.array, Y: np.array, debug: bool = False) -> pd.DataFrame:
+        """Will run a vectorized or looping pearson r"""
+        if not self.vectorize:
+            # Initialize
+            from scipy.stats import pearsonr
+            Y = Y.reshape(-1, 1) if Y.ndim == 1 else Y
+
+            n_voxels = Y.shape[1]
+            rho = np.zeros(n_voxels)
+            
+            # Iterate over each voxel
+            for i in range(n_voxels):
+                rho[i], _ = pearsonr(X[:, 0], Y[:, i])
+                
+            if debug:
+                print("X: ", X.shape, " Y: ", Y.shape)
+                print('Spearman correlation matrix shape: ', rho.shape)
+            r_df = pd.DataFrame(rho, index=np.arange(n_voxels), columns=['r'])
+        else:
+            if X.shape[0] != Y.shape[0]:
+                raise ValueError(f"The number of rows in X ({X.shape}) must match the number of rows in Y ({Y.shape}).")
+            # Calculate Numerator
+            X_BAR = X.mean(axis=0)[:, np.newaxis] # covariate average across patients
+            Y_BAR = Y.mean(axis=0)[np.newaxis, :] # voxelwise average across patients
+            X_C = X - X_BAR
+            Y_C = Y - Y_BAR
+            NUMERATOR = np.dot(X_C.T, Y_C) # Transposing to facilitate matmul
+            
+            # Calculate Denominator
+            SST_X = np.sum( (X - X_BAR)**2, axis=0) # Sum across a variable across patients
+            SST_Y = np.sum( (Y - Y_BAR)**2 , axis=0) # Sum across a voxel across patients
+            DENOMINATOR = np.sqrt(SST_X * SST_Y)
+    
+            # Pearson
+            r = NUMERATOR / DENOMINATOR
+            
+            if debug:
+                print("X: ", X.shape, " Y: ", Y.shape, " X_BAR :", X_BAR.shape, " Y_BAR ", Y_BAR.shape, " Y_C: ", Y_C.shape, " X_C: ", X_C.shape, "NUMERATOR :", NUMERATOR.shape, "DENOMINATOR: ", DENOMINATOR.shape, "R: ", r.shape)
+                print(np.max(X_C), np.max(Y_C), np.max(SST_X), np.max(SST_Y), DENOMINATOR)
+            r_df = pd.DataFrame(r.T, index=self.neuroimaging_dataframe.index, columns=['r'])
+        return r_df
+            
+    def correlation(self, permuted_variable_df: pd.DataFrame=None, debug: bool=False) -> pd.DataFrame:
+        """
+        Calculate voxelwise relationship to Y variable with correlation
+        It is STRONGLY advised to set mask=True when running this.
+        Args:
             debug (bool): if true, prints out summary metrics
 
         Returns:
@@ -260,16 +364,25 @@ class CalvinFWEMap():
             X = self.variable_dataframe.values.T 
         Y = self.neuroimaging_dataframe.values.T
         
-        R2_df = self.run_lin_reg(X,Y, debug=debug)
-        return R2_df
-
+        if self.method == 'spearman':
+            r_df = self.run_spearman(X, Y)
+        elif self.method == 'pearson':
+            r_df = self.run_pearson(X,Y)
+        else:
+            raise ValueError("Incorrect method specific. Options are 'spearman' | 'pearson'")
+        
+        if debug:
+            print(X.shape, Y.shape, r_df.shape)
+            print('Observed R max: ', np.max(r_df))
+        return r_df
+    
     def var_smooth(self, df):
         """Will take the 95th percentile of the permuted data as the 'maximum stat' as a proxy for variance smoothed max stat."""
         raise ValueError("Function not yet complete.")
     
     def pseudo_var_smooth(self, df):
-        """Will take the 99.5th percentile of the permuted data as the 'maximum stat' as a proxy for variance smoothed max stat."""
-        return np.array([[np.percentile(df, 99.5, axis=None)]])
+        """Will take the 99.99th percentile of the permuted data as the 'maximum stat' as a fast proxy for variance smoothed max stat."""
+        return np.array([[np.percentile(df, 99.99, axis=None)]])
     
     def raw_max_stat(self, df):
         """Will simply return the max statistic in the data"""
@@ -304,7 +417,7 @@ class CalvinFWEMap():
         max_stats = []
         for i in tqdm(range(0, n_permutations), desc='Permuting'):
             permuted_covariates = self.permute_covariates()
-            permuted_df = self.orchestrate_linear_regression(permuted_covariates, debug=False)
+            permuted_df = self.correlation(permuted_covariates, debug=False)
             max_stat = self.get_max_stat(permuted_df)
             max_stats.append(max_stat)
             if debug:
@@ -363,17 +476,14 @@ class CalvinFWEMap():
         """
         Orchestration method. 
         """
-        # Can be abstracted to run the analysis of choice and return it and the p-values
-        voxelwise_results = self.orchestrate_linear_regression(debug=debug)
+        #Can be abstracted to run the analysis of choice and return it and the p-values
+        voxelwise_results = self.correlation(debug=debug)
         max_stat_dist = self.maximum_stat_fwe(n_permutations=n_permutations, debug=debug)
         p_values, voxelwise_results_fwe = self.p_value_calculation(voxelwise_results, max_stat_dist, debug=debug)
-        
-        # Unmask
+        # 
         voxelwise_results = self.unmask_dataframe(voxelwise_results)
         unmasked_p_values = self.unmask_dataframe(p_values)
         voxelwise_results_fwe = self.unmask_dataframe(voxelwise_results_fwe)
-        
-        # Save
         self.save_results(voxelwise_results, unmasked_p_values, voxelwise_results_fwe)
         if debug:
             print(np.max(voxelwise_results), np.max(unmasked_p_values), np.max(voxelwise_results_fwe))

@@ -38,11 +38,11 @@ if __name__=='__main__':
     import os
     import pandas as pd
     import concurrent.futures
-    from calvin_utils.permutation_analysis_utils.permutation_utils.palm import permute_column
-    from calvin_utils.statistical_utils.voxelwise_statistical_testing import voxelwise_interaction_f_stat
-    from calvin_utils.permutation_analysis_utils.multiprocessing_utils.memory_management import MemoryCheckingExecutor
-    from calvin_utils.file_utils.script_printer import ScriptInfo
-    from calvin_utils.permutation_analysis_utils.scripts_for_submission.script_descriptions import script_dict
+    from calvin_utils_project.permutation_analysis_utils.permutation_utils.palm import permute_column
+    from calvin_utils_project.statistical_utils.voxelwise_statistical_testing import voxelwise_interaction_f_stat
+    from calvin_utils_project.permutation_analysis_utils.multiprocessing_utils.memory_management import MemoryCheckingExecutor
+    from calvin_utils_project.file_utils.script_printer import ScriptInfo
+    from calvin_utils_project.permutation_analysis_utils.scripts_for_submission.script_descriptions import script_dict
     from concurrent.futures import ProcessPoolExecutor, as_completed
 
 
