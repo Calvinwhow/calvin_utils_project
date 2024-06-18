@@ -1,0 +1,5 @@
+
+
+cp ~/templates/py3_notebooks/1_Preprocessing_LesionQA_fcSurfBcbLqtGen_nimtrack.ipynb ~/project_name/01_Preprocessing.ipynb
+
+cp ~/templates/py3_notebooks/2_Lesion_Network_Overlap.ipynb ~/project_name/02_Sensitivity_Map.ipynb
