@@ -112,4 +112,5 @@ venv.bak/
 
 # End the list with a blank line
 /.DS_Store
+**.DS_Store
 **/__pycache__**
