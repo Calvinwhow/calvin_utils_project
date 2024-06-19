@@ -120,8 +120,9 @@ class CalvinFWEMap():
         self.max_stat_method = max_stat_method
         self.vectorize = vectorize
         neuroimaging_dataframe, self.variable_dataframe = self.sort_dataframes(covariate_df=variable_dataframe, voxel_df=neuroimaging_dataframe)
-        self.outcome_df = self.get_outcome_df(outcome_row)
         self.original_mask, self.nonzero_mask, self.neuroimaging_dataframe = self.mask_dataframe(neuroimaging_dataframe)
+        self.coerce_df_to_numeric()
+        self.outcome_df = self.get_outcome_df(outcome_row)
         self.R2_trick = True
     
     def get_outcome_df(self, outcome_row:str = None):
@@ -132,6 +133,10 @@ class CalvinFWEMap():
             outcome_df = None
         return outcome_df
     
+    def coerce_df_to_numeric(self):
+        self.variable_dataframe = self.variable_dataframe.apply(pd.to_numeric, errors='coerce')
+        self.neuroimaging_dataframe = self.neuroimaging_dataframe.apply(pd.to_numeric, errors='coerce')
+
     def sort_dataframes(self, voxel_df: pd.DataFrame, covariate_df: pd.DataFrame, debug: bool=False) -> Tuple[pd.DataFrame, pd.DataFrame]:
         """
         Will sort the rows of the voxelwise DF and the covariate DF to make sure they are identically organized.
@@ -511,6 +516,11 @@ class CalvinFWEMap():
         max_stat_dist = max_stat_dist[:, np.newaxis]
         if debug:
             print(max_stat_dist.shape, uncorrected_df.values.shape)
+        
+        # Check for broadcast compatibility
+        if max_stat_dist.shape[0] != 1 or max_stat_dist.shape[0] != uncorrected_df.values.shape[0]:
+            max_stat_dist = max_stat_dist.reshape(1, -1)
+        
         p_values = np.mean(max_stat_dist >= uncorrected_df.values, axis=0)
         p_values_df = uncorrected_df.copy()
         p_values_df.loc[:,:] = p_values
