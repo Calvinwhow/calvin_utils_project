@@ -500,26 +500,25 @@ class CalvinFWEMap():
             print('5th percentile of permuted statistic: ', np.percentile(max_stats, 5))
         return max_stats
             
-    def p_value_calculation(self, uncorrected_df, max_stat_dist, debug=False):
+    def p_value_calculation(self, uncorrected_df, max_stat_list, debug=False):
         """
         Calculate p-values for the uncorrected statistic values using the distribution of maximum statistics.
 
         Args:
             uncorrected_df (pd.DataFrame): DataFrame of uncorrected statistic values.
-            max_stat_dist (list): Distribution of maximum statistic values from each permutation.
+            max_stat_list (list): Distribution of maximum statistic values from each permutation.
 
         Returns:
             np.ndarray: Array of p-values corresponding to the uncorrected statistic values.
         """
         # Calculate P-Values
-        max_stat_dist = np.array(max_stat_dist)
-        max_stat_dist = max_stat_dist[:, np.newaxis]
+        max_stat_dist = np.array(max_stat_list).reshape(1,-1)
         if debug:
-            print(max_stat_dist.shape, uncorrected_df.values.shape)
+            print("Max Stat Dist Shape: ",max_stat_dist.shape, "DF Shape: ", uncorrected_df.values.shape)
     
         # Calulcate P Values
         boolean_dist = max_stat_dist >= uncorrected_df.values
-        p_values = np.mean(boolean_dist, axis=0)
+        p_values = np.mean(boolean_dist, axis=1, keepdims=True)
         if debug:
             print("Boolean Shape: ", boolean_dist.shape, "P Values shape: ", p_values.shape)
             
@@ -589,8 +588,8 @@ class CalvinFWEMap():
         """
         # Can be abstracted to run the analysis of choice and return it and the p-values
         voxelwise_results = self.orchestrate_linear_regression(debug=debug)
-        max_stat_dist = self.maximum_stat_fwe(n_permutations=n_permutations, debug=debug)
-        p_values, voxelwise_results_fwe = self.p_value_calculation(voxelwise_results, max_stat_dist, debug=debug)
+        max_stat_list = self.maximum_stat_fwe(n_permutations=n_permutations, debug=debug)
+        p_values, voxelwise_results_fwe = self.p_value_calculation(voxelwise_results, max_stat_list, debug=debug)
         
         # Unmask
         voxelwise_results = self.unmask_dataframe(voxelwise_results)
