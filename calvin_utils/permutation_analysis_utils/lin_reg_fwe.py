@@ -516,12 +516,14 @@ class CalvinFWEMap():
         max_stat_dist = max_stat_dist[:, np.newaxis]
         if debug:
             print(max_stat_dist.shape, uncorrected_df.values.shape)
-        
-        # Check for broadcast compatibility
-        if max_stat_dist.shape[0] != 1 or max_stat_dist.shape[0] != uncorrected_df.values.shape[0]:
-            max_stat_dist = max_stat_dist.reshape(1, -1)
-        
-        p_values = np.mean(max_stat_dist >= uncorrected_df.values, axis=0)
+    
+        # Calulcate P Values
+        boolean_dist = max_stat_dist >= uncorrected_df.values
+        p_values = np.mean(boolean_dist, axis=0)
+        if debug:
+            print("Boolean Shape: ", boolean_dist.shape, "P Values shape: ", p_values.shape)
+            
+        # insert P values
         p_values_df = uncorrected_df.copy()
         p_values_df.loc[:,:] = p_values
         
