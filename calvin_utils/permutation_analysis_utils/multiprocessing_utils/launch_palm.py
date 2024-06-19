@@ -5,9 +5,9 @@ import numpy as np
 import pandas as pd
 import concurrent.futures
 from nimlab import datasets as nimds
-from calvin_utils_project.permutation_analysis_utils.permutation_utils.palm import whole_brain_permutation_test, permute_column, permute_row, permute_contrast_matrix
-from calvin_utils_project.file_utils.dataframe_utilities import preprocess_colnames_for_regression
-from calvin_utils_project.statistical_utils.voxelwise_statistical_testing import voxelwise_interaction_f_stat
+from calvin_utils.permutation_analysis_utils.permutation_utils.palm import whole_brain_permutation_test, permute_column, permute_row, permute_contrast_matrix
+from calvin_utils.file_utils.dataframe_utilities import preprocess_colnames_for_regression
+from calvin_utils.statistical_utils.voxelwise_statistical_testing import voxelwise_interaction_f_stat
 
 class v1:
     #----------------------------------------------------------------Begin User Input
@@ -167,11 +167,11 @@ class PermutationTester:
 # )
 
 from sklearn.preprocessing import StandardScaler
-from calvin_utils_project.file_utils.import_matrices import import_matrices_from_folder, import_matrices_from_csv
-from calvin_utils_project.nifti_utils.generate_nifti import nifti_from_matrix
+from calvin_utils.file_utils.import_matrices import import_matrices_from_folder, import_matrices_from_csv
+from calvin_utils.nifti_utils.generate_nifti import nifti_from_matrix
 from nimlab import datasets as nimds
 import numpy as np
-from calvin_utils_project.statistical_utils.z_score_matrix import z_score_matrix
+from calvin_utils.statistical_utils.z_score_matrix import z_score_matrix
 
 class VoxelwiseInteractionTester(PermutationTester):
     def __init__(self, n_permutations, outcome_path, neuroimaging_paths, clinical_paths, covariate_columns, out_dir, job_name,

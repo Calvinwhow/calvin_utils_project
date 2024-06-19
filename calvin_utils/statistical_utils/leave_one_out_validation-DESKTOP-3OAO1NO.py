@@ -2,7 +2,7 @@
 import numpy as np
 import pandas as pd
 from scipy.stats import pearsonr
-from calvin_utils_project.statistical_utils.custom_regressions import generalizable_multivariate_regression
+from calvin_utils.statistical_utils.custom_regressions import generalizable_multivariate_regression
 import pandas as pd
 
 def leave_one_out(data_df, outcome_var, function, outcomes, leave_out_variable='index'):

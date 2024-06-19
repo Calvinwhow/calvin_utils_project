@@ -21,7 +21,7 @@ import nibabel as nib
 from glob import glob
 from tqdm import tqdm
 from nilearn import image
-from calvin_utils_project.nifti_utils.generate_nifti import view_and_save_nifti
+from calvin_utils.nifti_utils.generate_nifti import view_and_save_nifti
 
 class GiiNiiFileImport:
     """

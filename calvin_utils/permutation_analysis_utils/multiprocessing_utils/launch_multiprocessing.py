@@ -1,4 +1,4 @@
-from calvin_utils_project.permutation_analysis_utils.multiprocessing_utils import *
+from calvin_utils.permutation_analysis_utils.multiprocessing_utils import *
 # # Usage in Jupyter notebook
 # job = ClusterJob()
 # job.run()

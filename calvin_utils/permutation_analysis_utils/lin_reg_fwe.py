@@ -4,7 +4,7 @@ from tqdm import tqdm
 import nibabel as nib
 from typing import Tuple
 from sklearn.linear_model import LinearRegression
-from calvin_utils_project.nifti_utils.generate_nifti import view_and_save_nifti
+from calvin_utils.nifti_utils.generate_nifti import view_and_save_nifti
 
 class CalvinFWEMap():
     """

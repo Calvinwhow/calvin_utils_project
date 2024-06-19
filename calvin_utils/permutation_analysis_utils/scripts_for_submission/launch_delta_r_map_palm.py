@@ -5,10 +5,10 @@ import numpy as np
 import pandas as pd
 import concurrent.futures
 from nimlab import datasets as nimds
-from calvin_utils_project.permutation_analysis_utils.permutation_utils.palm import whole_brain_permutation_test
-from calvin_utils_project.permutation_analysis_utils.permutation_utils.palm import permute_contrast_matrix
-from calvin_utils_project.permutation_analysis_utils.permutation_utils.palm import permute_column
-from calvin_utils_project.statistical_utils.voxelwise_statistical_testing import generate_delta_r_map
+from calvin_utils.permutation_analysis_utils.permutation_utils.palm import whole_brain_permutation_test
+from calvin_utils.permutation_analysis_utils.permutation_utils.palm import permute_contrast_matrix
+from calvin_utils.permutation_analysis_utils.permutation_utils.palm import permute_column
+from calvin_utils.statistical_utils.voxelwise_statistical_testing import generate_delta_r_map
 
 #----------------------------------------------------------------Begin User Input
 # Gather information from terminal

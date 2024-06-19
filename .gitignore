@@ -114,5 +114,5 @@ venv.bak/
 /.DS_Store
 **.DS_Store
 **/__pycache__**
-calvin_utils_project.code-workspace
+calvin_utils.code-workspace
 .DS_Store

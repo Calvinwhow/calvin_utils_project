@@ -1,8 +1,8 @@
 import numpy as np
 import pandas as pd
 from nimlab import datasets as nimds
-from calvin_utils_project.nifti_utils.generate_nifti import view_and_save_nifti
-from calvin_utils_project.nifti_utils.matrix_utilities import threshold_matrix, import_nifti_to_numpy_array, unmask_matrix, apply_mask_to_dataframe
+from calvin_utils.nifti_utils.generate_nifti import view_and_save_nifti
+from calvin_utils.nifti_utils.matrix_utilities import threshold_matrix, import_nifti_to_numpy_array, unmask_matrix, apply_mask_to_dataframe
 
 class ConjunctionMap:
     def __init__(self, nift_path_1, nift_path_2, threshold1, threshold2, direction1, direction2, mask_path=None, 
