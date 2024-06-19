@@ -3,6 +3,7 @@ import pandas as pd
 from tqdm import tqdm
 import nibabel as nib
 from typing import Tuple
+import statsmodels.api as sm
 from sklearn.linear_model import LinearRegression
 from calvin_utils.nifti_utils.generate_nifti import view_and_save_nifti
 
@@ -17,6 +18,16 @@ class CalvinFWEMap():
         being a numerically unstable result of a bad permutation.
     - Linear regression is implemented using sklearn's LinearRegression, allowing for efficient 
         and vectorized computations across large datasets.
+    - Empiric and theoretical evaluation has revealed:
+        - R2(voxel ~ outcome) == R2(outcome ~ voxel)
+            - Spatial correlation of 100%
+        - T_outcome(voxel ~ outcome) != T_voxel(outcome ~ voxel)
+            - Spatial correlation ~49%
+        - This can be leveraged, to test the overall fit with vectorization of voxel ~ outcome
+           and then using a single evaluation of T_voxel(outcome ~ voxel) to get the relationship.
+           We take advantage of this trick to permute the overall R2 for significance testing
+           Then, the individual regressors can be calculated properly on a voxelwise manner and masked by the
+           regions with a significant fit. 
     
     Attributes:
     -----------
@@ -88,7 +99,7 @@ class CalvinFWEMap():
     run(n_permutations: int=100, debug: bool=False)
         Orchestration method to run the entire analysis and save the results.
     """
-    def __init__(self, neuroimaging_dataframe: pd.DataFrame, variable_dataframe: pd.DataFrame, mask_path=None, mask_threshold: int=0.0, out_dir='', max_stat_method=None, vectorize=True):
+    def __init__(self, neuroimaging_dataframe: pd.DataFrame, variable_dataframe: pd.DataFrame, outcome_row: str = None, mask_path=None, mask_threshold: int=0.0, out_dir='', max_stat_method=None, vectorize=True):
         """
         Need to provide the dataframe dictionaries and dataframes of importance. 
         
@@ -97,6 +108,8 @@ class CalvinFWEMap():
                                         and each row represents a voxel.
         - variable_dataframe (pd.DataFrame): DataFrame where each column represents represents a subject,
                                         and each row represents the variable to regress upon. 
+        - outcome_col (str): The column in variable_dataframe which holds the outcome variable.
+                                        This will cause a voxelwise regression to occur. 
         - mask_path (str): the path to the mask you want to use. 
                                         If None, will threshold the voxelwise image itself by mask_threshold.
         - mask_threshold (int): The threshold to mask the neuroimaging data at.
@@ -107,9 +120,18 @@ class CalvinFWEMap():
         self.max_stat_method = max_stat_method
         self.vectorize = vectorize
         neuroimaging_dataframe, self.variable_dataframe = self.sort_dataframes(covariate_df=variable_dataframe, voxel_df=neuroimaging_dataframe)
+        self.outcome_df = self.get_outcome_df(outcome_row)
         self.original_mask, self.nonzero_mask, self.neuroimaging_dataframe = self.mask_dataframe(neuroimaging_dataframe)
-
-        
+        self.R2_trick = True
+    
+    def get_outcome_df(self, outcome_row:str = None):
+        """A simple method to get the outcome of interest from self.variable_df"""
+        if outcome_row is not None:
+            outcome_df = self.variable_dataframe.loc[[outcome_row], :]
+        else:
+            outcome_df = None
+        return outcome_df
+    
     def sort_dataframes(self, voxel_df: pd.DataFrame, covariate_df: pd.DataFrame, debug: bool=False) -> Tuple[pd.DataFrame, pd.DataFrame]:
         """
         Will sort the rows of the voxelwise DF and the covariate DF to make sure they are identically organized.
@@ -216,26 +238,186 @@ class CalvinFWEMap():
         """Permute the patient data by randomly assigning patient data (columnar data) to new patients (columns)"""
         return self.variable_dataframe.sample(frac=1, axis=1, random_state=None)
     
-    def run_lin_reg(self, X, Y, use_intercept: bool=True, debug: bool=False):
-        # Fit model on control data across all voxels
-        model = LinearRegression(fit_intercept=use_intercept)
-        model.fit(X, Y)
+    def prepare_dmatrix(self, use_intercept, permuted_variable_df, debug):
+        """
+        Params
+        -----
+        use_intercept (bool): whether to add an intercept. if true, numpy will add intercept to start of covariates
+        permuted_variable_df (pd.DataFrame): the permuted data from either vectorized or voxelwise path. If detected, will use this for Y. 
         
-        # Predict on experimental group and calculate R-squared
-        Y_HAT = model.predict(X)
-        Y_BAR = np.mean(Y, axis=0, keepdims=True)
-        SSE = np.sum( (Y_HAT - Y_BAR)**2, axis=0)
-        SST = np.sum( (Y     - Y_BAR)**2, axis=0)
-        R2 = SSE/SST
- 
+        Returns
+        -------
+        X: covariates. in vectorized method, returns (observations, covariates) | In voxelwise method, voxels need to be added later 
+        Y: Dep var. in vectorized method, returns (observations, voxels) | In voxelwise method, is (observations, 1)
+        
+        Notes
+        -----
+        Will prepare the design matrix and dependent variables for either vectorized or voxelwise regression
+        """
+        Y = self.neuroimaging_dataframe.values # Y is a an array of niftis
+        
+        # Get X variables
+        if permuted_variable_df is not None: 
+            X = permuted_variable_df.values
+        else:
+            X = self.variable_dataframe.values
+                
+        # Prepend the intercept to the X variables
+        if use_intercept:
+            intercept = np.ones((1, X.shape[1]))  # Create a row of ones for the intercept
+            X = np.vstack((intercept, X))  # Add the intercept term to the covariates
+        else:
+            X = X 
+        self.used_intercept = use_intercept
+        
         if debug:
-            print(X.shape, Y.shape, Y_HAT.shape, Y_BAR.shape, SSE.shape, SST.shape, R2.shape)
-            print('Observed R2 max: ', np.max(R2))
-            
-        # Reshape R2 to DataFrame format
-        return pd.DataFrame(R2.T, index=self.neuroimaging_dataframe.index, columns=['R2'])
+            print("X PRE RESHAPE: ", X.shape, "Y PRE RESHAPE: ", Y.shape)
+        
+        return X.T, Y.T # Reshaped so shape is: X: (observations, covariates) and Y: (observations, voxels)
     
-    def orchestrate_linear_regression(self, permuted_variable_df: pd.DataFrame=None, debug: bool=False) -> pd.DataFrame:
+    def prepare_voxelwise_dmatrix(self, use_intercept=True):
+        Y = self.outcome_df.values # Y, an array of observation variables in shape (1, observations)
+        
+        # Get X variables
+        if self.variable_dataframe.shape[0] > 0: # Check if there are any covariates
+            outcome_row = self.outcome_df.index[0]
+            covariates = self.variable_dataframe.drop(labels=outcome_row, axis=0)
+        
+        # Get the covariates
+        if covariates.shape[1] > 0:
+            X = covariates.values # covariates in shape (covariates, observation)
+        else:
+            X = None # if empty, set to None
+
+        # Prepend the intercept to the X variables
+        if use_intercept and X is not None:
+            intercept = np.ones((1, X.shape[1]))  # Create a row of ones for the intercept
+            X = np.vstack((intercept, X))  # Add the intercept term to the covariates
+        # If no X variables, only use intercept
+        elif use_intercept and X is None:
+            X = np.ones((1, Y.shape[1]))
+        # impossible condition
+        else:
+            raise NotImplementedError("It is impossible to regress something upon No intercept and no covariates. Fix design matrix or add intercept.")
+        
+        return X.T, Y.T # Reshaped so shape is: X: (observations, covariates) and Y: (observations, voxels)
+        
+    def get_t_values(self, model, X, Y, SSE=None, debug=False, vectorize=False):
+        """
+        Params:
+        -------
+        model: the model fit by sklearn.LinearRegression
+        X: the matrix of regressors
+        Y: matrix of outcomes
+        SSE: sum of squared errors
+        vectorize: use reliable regression method on voxelwise basis or uses math to broadcast.
+        
+        Returns:
+        --------
+        Numpy array of the T-values for each regressor. 
+        
+        Notes:
+        ------
+        TODO: The vectorized version is failing to calculate the coefficients appropriately. Fix this. 
+        
+        T = beta/std. err(beta)
+        betas can be achieved from model._coef
+        Std. err(beta) is MSE * Inverse(variance-covariance matrix of X). 
+            The variance of each beta is along the diagonal. 
+        MSE is SSE / DF
+            DF of error is N - P
+        """
+        # Generate vectorized T-Values. Is unstable.
+        if vectorize:
+            print("Broadcasting manual calculation of T-values of voxel ~ covariates")
+            INT = model.intercept_[:, np.newaxis] #convert to 2d array for concat
+            COEF = model.coef_[:, 1:] # When fitting an intercept, SKLEARN will overwrite ours. It's a bitch, but what can you do.
+            BETA = np.hstack((INT, COEF))
+            
+            N, P = X.shape
+            DF = N - P
+            MSE = SSE / DF 
+            MSE = MSE.reshape(-1, 1)# Shaped to (voxels, observation)
+            
+            XTX = np.dot(X.T, X)
+            XTX_I = np.linalg.inv(XTX)  
+            DIAG_XTX_I = np.diag(XTX_I) #taking diagonal early to avoid dealing with covariance matrix
+            DIAG_XTX_I = DIAG_XTX_I.reshape(1, -1) # Shaped to (voxel, covariates)
+            VAR_BETA = MSE * DIAG_XTX_I
+            
+            STD_BETA = np.sqrt((VAR_BETA))
+            
+            T = BETA/STD_BETA # reshaping to enable broadcasting to shape: (n_voxels, n_covariates)
+
+            if debug:
+                print("BETA SHAPE: ", BETA.shape, "MSE SHAPE: ", MSE.shape, "XTX SHAPE: ", XTX.shape, "XTX_I SHAPE: ", XTX_I.shape, "DIAG_XTX_I SHAPE: ", DIAG_XTX_I.shape, "VAR_BETA SHAPE: ", VAR_BETA.shape, " STD BETA SHAPE: ", STD_BETA.shape)
+        
+        # Generate T-values for regression WITHOUT voxelwise variables.
+        elif not vectorize and self.outcome_df is None:
+            print("Using statsmodels for voxelwise calculation of T-values of voxel ~ covariates")
+            T = []
+            for voxel in range(Y.shape[1]):
+                y_voxel = Y[:, voxel]
+                sm_model = sm.OLS(y_voxel, X).fit()
+                T.append(sm_model.tvalues)
+            
+            T = np.array(T)  # Transpose to match expected shape
+            if debug:
+                print("Statsmodels T-values shape:", T.shape)
+        
+        # Generate T-values for regression WITH voxelwise variables       
+        elif self.outcome_df is not None:
+            print("Using statsmodels for voxelwise calculation of T-values of Outcome ~ voxel + covariates")
+            T = []
+            X, Y = self.prepare_voxelwise_dmatrix()
+            for voxel_i in range(self.neuroimaging_dataframe.shape[0]): #neuroimaging DF is in shape (voxels, observations)
+                voxel = self.neuroimaging_dataframe.iloc[voxel_i, :].values.T.reshape(-1, 1) #reshaping to (observation, voxels) for compat. w/ X
+                X_V = np.hstack((X, voxel)) # Finalize the design matrix
+                
+                model = sm.OLS(Y, X_V).fit() # fit model on a single voxel
+                T.append(model.tvalues)
+            T = np.array(T)
+        else:
+            raise NotImplementedError("Unimplemented t-values request.")
+        return T
+            
+    def run_lin_reg(self, X, Y, debug: bool=False):
+        """Will run regression on X and Y arrays, entering as shape (observations, variable)"""
+        if not self.vectorize: # Voxelwise regression, suitable for regression of voxels on variables.
+            R2 = []
+            for voxel_i in range(self.neuroimaging_dataframe.shape[0]): #neuroimaging DF is in shape (voxels, observations)
+                voxel = self.neuroimaging_dataframe.iloc[voxel_i, :].values.T.reshape(-1, 1) #reshaping to (observation, voxels) for compat. w/ X
+                X_V = np.hstack((X, voxel)) # Finalize the design matrix
+                
+                model = sm.OLS(Y, X_V).fit() # fit model on a single voxel
+                R2.append(model.rsquared) 
+            
+            R2 = np.array(R2)  # Transpose to match expected shape
+            SSE = None
+        
+        else: # Vectorized regression suitable for regression of Cov. on an entire nifti. 
+            # Fit model on control data across all voxels
+            model = LinearRegression(fit_intercept=True)
+            model.fit(X, Y)
+
+            # Predict on experimental group and calculate R-squared
+            Y_HAT = model.predict(X)
+            Y_BAR = np.mean(Y, axis=0, keepdims=True)
+
+            SSE = np.sum( (Y_HAT - Y_BAR)**2, axis=0)
+            SST = np.sum( (Y     - Y_BAR)**2, axis=0)
+            R2 = SSE/SST
+
+            if debug:
+                print("Y HAT SHAPE: ", Y_HAT.shape, "Y BAR SHAPE: ",  Y_BAR.shape, "SSE SHAPE: ", SSE.shape, "SST SHAPE: ", SST.shape)
+        
+        if debug:
+            print("X SHAPE: ", X.shape, "Y SHAPE: ", Y.shape, 'Observed R2 max: ', np.max(R2), "R2 SHAPE: ", R2.shape)
+                    
+        # Reshape R2 to DataFrame format
+        return pd.DataFrame(R2.T, index=self.neuroimaging_dataframe.index, columns=['R2']), model, SSE
+    
+    def orchestrate_linear_regression(self, permuted_variable_df: pd.DataFrame=None, use_intercept: bool=True, debug: bool=False) -> pd.DataFrame:
         """
         Calculate voxelwise relationship to Y variable with linear regression.
         It is STRONGLY advised to set mask=True when running this.
@@ -252,15 +434,13 @@ class CalvinFWEMap():
 
         Returns:
             pd.DataFrame:
-        """
-        # Design matrix X for control group, outcomes Y for control group
-        if permuted_variable_df is not None:
-            X = permuted_variable_df.values.T
-        else:
-            X = self.variable_dataframe.values.T 
-        Y = self.neuroimaging_dataframe.values.T
+        """ 
+        X, Y = self.prepare_dmatrix(use_intercept=use_intercept, permuted_variable_df=permuted_variable_df, debug=debug)
         
-        R2_df = self.run_lin_reg(X,Y, debug=debug)
+        R2_df, model, SSE = self.run_lin_reg(X, Y, debug=debug)
+        
+        if permuted_variable_df is None: # Only get t-values on the first loop. Are automatically calulcated when using voxelwise method.
+            self.T_arr = self.get_t_values(model, X, Y, SSE, debug=debug)
         return R2_df
 
     def var_smooth(self, df):
@@ -355,9 +535,41 @@ class CalvinFWEMap():
         """
         Saves the generated files. 
         """
-        self.uncorrected_img = self.save_single_nifti(nifti_df=voxelwise_results, out_dir=self.out_dir, name='uncorrected_results', silent=False)
-        self.p_img = self.save_single_nifti(nifti_df=unmasked_p_values, out_dir=self.out_dir, name='p_values', silent=False)
-        self.corrected_img = self.save_single_nifti(nifti_df=voxelwise_results_fwe, out_dir=self.out_dir, name='fwe_corrected_results', silent=False)
+        self.uncorrected_img = self.save_single_nifti(nifti_df=voxelwise_results, out_dir=self.out_dir, name='R2_uncorrected', silent=False)
+        self.p_img = self.save_single_nifti(nifti_df=unmasked_p_values, out_dir=self.out_dir, name='R2_uncorrected_p_values', silent=False)
+        self.corrected_img = self.save_single_nifti(nifti_df=voxelwise_results_fwe, out_dir=self.out_dir, name='R2_fwe_corrected', silent=False)
+    
+    def save_each_covariate(self):
+        """
+        Save each covariate's t-values into separate NIFTI files after unmasking.
+        
+        Params:
+        -------
+        self.t_values_array: np.ndarray
+            Array of t-values with shape (n_covariates, n_voxels)
+        self.out_dir: str
+            Directory to save the NIFTI files.
+        """
+        n_covariates = self.T_arr.shape[1]
+
+        for i in range(n_covariates):
+            covariate_t_values = self.T_arr[:, i]
+            
+            # Get Covariate Name
+            if i == 0 and self.used_intercept: #if at initial value, check if is intercept
+                name = 'intercept'
+            elif i == range(n_covariates)[1] and self.outcome_df is not None: #if at final value, check if is voxelwise covariate
+                name = 'voxelwise'
+            else:
+                name = self.variable_dataframe.index[i-1]
+            # Convert to DataFrame
+            covariate_df = pd.DataFrame(covariate_t_values, index=self.neuroimaging_dataframe.index)
+
+            # Unmask the DataFrame
+            unmasked_covariate_df = self.unmask_dataframe(covariate_df)
+
+            # Save the NIFTI file
+            self.final_t_value = self.save_single_nifti(nifti_df=unmasked_covariate_df, out_dir=self.out_dir, name=f'beta_{name}_t_values', silent=False)
 
     def run(self, n_permutations=100, debug=False):
         """
@@ -375,6 +587,7 @@ class CalvinFWEMap():
         
         # Save
         self.save_results(voxelwise_results, unmasked_p_values, voxelwise_results_fwe)
+        self.save_each_covariate()
         if debug:
             print(np.max(voxelwise_results), np.max(unmasked_p_values), np.max(voxelwise_results_fwe))
             print(voxelwise_results.shape, unmasked_p_values.shape, voxelwise_results_fwe.shape)
