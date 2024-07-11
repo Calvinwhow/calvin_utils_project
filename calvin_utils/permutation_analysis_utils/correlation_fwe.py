@@ -125,7 +125,7 @@ class CalvinFWEMap():
         neuroimaging_dataframe, self.variable_dataframe = self.sort_dataframes(covariate_df=variable_dataframe, voxel_df=neuroimaging_dataframe)
         self.original_mask, self.nonzero_mask, self.neuroimaging_dataframe = self.mask_dataframe(neuroimaging_dataframe)
 
-    def sort_dataframes(self, voxel_df: pd.DataFrame, covariate_df: pd.DataFrame, debug: bool=False) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    def sort_dataframes(self, voxel_df: pd.DataFrame, covariate_df: pd.DataFrame, debug: bool=False, dedup: bool=True) -> Tuple[pd.DataFrame, pd.DataFrame]:
         """
         Will sort the rows of the voxelwise DF and the covariate DF to make sure they are identically organized.
         Then will check that the columns are equivalent.
@@ -139,23 +139,42 @@ class CalvinFWEMap():
             
             shared_columns = list(set(voxel_cols).intersection(set(covariate_cols)))
             
-            if debug:
-                # Print shared columns for debugging
-                print("Shared Columns:", shared_columns)
-                
-                # Identify and print dropped columns
-                dropped_voxel_cols = set(voxel_df.columns) - set(shared_columns)
-                dropped_covariate_cols = set(covariate_df.columns) - set(shared_columns)
-                
-                if dropped_voxel_cols:
-                    print("Dropped Voxel Columns:", dropped_voxel_cols)
-                if dropped_covariate_cols:
-                    print("Dropped Covariate Columns:", dropped_covariate_cols)
         except:
             # Force Columns to Match
-            voxel_cols = set(voxel_df.columns.astype(str).sort_values().values)
-            covariate_cols = set(covariate_df.columns.astype(str).sort_values().values)
-            shared_columns = list(voxel_cols.intersection(covariate_cols))
+            voxel_cols = voxel_df.columns.astype(str).values
+            covariate_cols = covariate_df.columns.astype(str).values
+            
+            voxel_df.columns = voxel_cols
+            covariate_df.columns = covariate_cols
+                        
+            shared_columns = list(set(voxel_cols).intersection(set(covariate_cols)))
+        
+        if debug:
+            # Print shared columns for debugging
+            print("Shared Columns:", shared_columns)
+            
+            # Identify and print dropped columns
+            dropped_voxel_cols = set(voxel_df.columns) - set(shared_columns)
+            dropped_covariate_cols = set(covariate_df.columns) - set(shared_columns)
+            
+            if dropped_voxel_cols:
+                print("Dropped Voxel Columns:", dropped_voxel_cols)
+            if dropped_covariate_cols:
+                print("Dropped Covariate Columns:", dropped_covariate_cols)
+                
+        if dedup:
+            # Detect and print duplicate columns
+            voxel_duplicates = voxel_df.columns[voxel_df.columns.duplicated()].tolist()
+            covariate_duplicates = covariate_df.columns[covariate_df.columns.duplicated()].tolist()
+
+            if voxel_duplicates:
+                print("WARNING: duplicate columns in voxel_df:", voxel_duplicates)
+            if covariate_duplicates:
+                print("WARNING: duplicate columns in covariate_df:", covariate_duplicates)
+                
+            # Remove any potential duplicate columns
+            voxel_df = voxel_df.loc[:, ~voxel_df.columns.duplicated()]
+            covariate_df = covariate_df.loc[:, ~covariate_df.columns.duplicated()]
         
         # Align dataframes to shared columns
         aligned_voxel_df = voxel_df.loc[:, shared_columns]
@@ -252,7 +271,12 @@ class CalvinFWEMap():
             ranks[np.arange(arr.shape[0])[:, np.newaxis], sorter] = np.arange(arr.shape[1]) + 1
         return ranks
     
-    def run_spearman(self, X: np.array, Y: np.array, debug: bool = False) -> pd.DataFrame:
+    def prep_data(self, array):
+        if not np.issubdtype(array.dtype, np.floating):
+            array = array.astype(float)
+        return array
+    
+    def run_spearman(self, X: np.array, Y: np.array, debug: bool=False, flip: bool=False) -> pd.DataFrame:
         """
         Calculate voxelwise relationship to Y variable with Spearman correlation.
 
@@ -260,9 +284,13 @@ class CalvinFWEMap():
             X (pd.DataFrame): DataFrame of independent variables (e.g., patients x variables).
             Y (pd.DataFrame): DataFrame of dependent variables (e.g., patients x voxels).
             debug (bool): If true, prints out summary metrics.
+            flip (bool): If true, flips the X and Y variables. For assessing commutative nature of correlation.
 
         Returns:
             pd.DataFrame: DataFrame of correlation coefficients.
+            
+        Note:
+            Spearman correlation will generate a NaN value when there is no variation in either X or Y. 
         """
         if not self.vectorize:
             from scipy.stats import spearmanr
@@ -272,9 +300,16 @@ class CalvinFWEMap():
             
             # Iterate over each voxel
             for i in range(n_voxels):
-                rho[i], _ = spearmanr(X, Y[:, i])
+                if flip:
+                    rho[i], _ = spearmanr(X, Y[:, i])
+                else:
+                    rho[i], _ = spearmanr(Y[:, i], X)
                 
             if debug:
+                print("Xna: ", "there are NaNs" if np.any(np.isnan(X)) else "no NaNs", 
+                    " YNaN: ", "there are NaNs" if np.any(np.isnan(Y)) else "no NaNs", 
+                    " RhoNaN: ", "there are NaNs" if np.any(np.isnan(rho)) else "no NaNs")
+                print("Rho max: ", np.max(rho))
                 print("X: ", X.shape, " Y: ", Y.shape)
                 print('Spearman correlation matrix shape: ', rho.shape)
 
@@ -364,12 +399,16 @@ class CalvinFWEMap():
             X = self.variable_dataframe.values.T 
         Y = self.neuroimaging_dataframe.values.T
         
+        # Make sure data is correctly formatted
+        X = self.prep_data(X)
+        Y = self.prep_data(Y)
+        
         if self.method == 'spearman':
-            r_df = self.run_spearman(X, Y)
+            r_df = self.run_spearman(X, Y, debug=debug)
         elif self.method == 'pearson':
-            r_df = self.run_pearson(X,Y)
+            r_df = self.run_pearson(X,Y, debug=debug)
         else:
-            raise ValueError("Incorrect method specific. Options are 'spearman' | 'pearson'")
+            raise ValueError("Incorrect method specified. Options are 'spearman' | 'pearson'")
         
         if debug:
             print(X.shape, Y.shape, r_df.shape)
@@ -382,14 +421,16 @@ class CalvinFWEMap():
     
     def pseudo_var_smooth(self, df):
         """Will take the 99.99th percentile of the permuted data as the 'maximum stat' as a fast proxy for variance smoothed max stat."""
-        return np.array([[np.percentile(df, 99.99, axis=None)]])
+        return np.array([[np.percentile(np.abs(df), 99.99, axis=None)]])
     
     def raw_max_stat(self, df):
         """Will simply return the max statistic in the data"""
-        return np.max(df)
+        return np.max(np.abs(df))
     
     def get_max_stat(self,df):
-        """Will choose the max stat methoda and return the max stat"""
+        """Will choose the max stat methoda and return the max stat. All methods will use 2-tailed testing."""
+        # Removing NaNs to prevent choosing NaN as threshold (which is considered maximum by numpy)
+        df.dropna(inplace=True)
         if self.max_stat_method is None:
             max_stat = self.raw_max_stat(df)
         elif self.max_stat_method == 'pseudo_var_smooth':
@@ -444,16 +485,16 @@ class CalvinFWEMap():
         max_stat_dist = max_stat_dist[:, np.newaxis]
         if debug:
             print(max_stat_dist.shape, uncorrected_df.values.shape)
-        p_values = np.mean(max_stat_dist >= uncorrected_df.values, axis=0)
+        p_values = np.mean(max_stat_dist >= np.abs(uncorrected_df.values), axis=0) # Absval for 2-tail testing
         p_values_df = uncorrected_df.copy()
         p_values_df.loc[:,:] = p_values
         
         # Threshold by 95th Percentile of Max Status
         threshold = np.percentile(max_stat_dist, 95)
-        corrected_df = uncorrected_df.where(uncorrected_df > threshold, 0)
+        corrected_df = uncorrected_df.where(np.abs(uncorrected_df) > threshold, 0)
 
         if debug:
-            print(p_values_df.shape, f'\n Max in uncorrected DF: {np.max(uncorrected_df)} \n', f'Threshold: {threshold} \n', f'Max in corrected DF: {np.max(corrected_df)}')
+            print(p_values_df.shape, f'\n Max absolute value in uncorrected DF: {np.max(np.abs(uncorrected_df))} \n', f'Absolute threshold: {threshold} \n', f'Max absolute value in corrected DF: {np.max(np.abs(corrected_df))}')
         return p_values_df, corrected_df
 
     def save_single_nifti(self, nifti_df, out_dir, name='generated_nifti', silent=True):

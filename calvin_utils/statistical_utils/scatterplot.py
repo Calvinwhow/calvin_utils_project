@@ -50,7 +50,10 @@ class ScatterplotGenerator:
     def initialize_figure(self):
         """Initialize a new figure with subplots for each independent variable."""
         fig, axes = plt.subplots(self.rows_per_fig, self.cols_per_fig, figsize=(self.cols_per_fig * 5, self.rows_per_fig * 5))
-        axes = axes.flatten()
+        if self.cols_per_fig > 1:
+            axes = axes.flatten()
+        else:
+            axes = axes
         self.figures.append(fig)
         return fig, axes
 

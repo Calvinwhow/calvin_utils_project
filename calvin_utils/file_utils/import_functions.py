@@ -330,8 +330,10 @@ class GiiNiiFileImport:
         # For each column name in the dataframe
         for name in raw_names:
             new_name = name  # Default to the original name in case it doesn't match any split command
-            new_name = new_name.split(pre)[1]
-            new_name = new_name.split(post)[0]
+            if pre != '':
+                new_name = new_name.split(pre)[1]
+            if post != '':
+                new_name = new_name.split(post)[0]
             
             # Add the original and new name to the mapping
             name_mapping[name] = new_name

@@ -137,7 +137,7 @@ class CalvinFWEMap():
         self.variable_dataframe = self.variable_dataframe.apply(pd.to_numeric, errors='coerce')
         self.neuroimaging_dataframe = self.neuroimaging_dataframe.apply(pd.to_numeric, errors='coerce')
 
-    def sort_dataframes(self, voxel_df: pd.DataFrame, covariate_df: pd.DataFrame, debug: bool=False) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    def sort_dataframes(self, voxel_df: pd.DataFrame, covariate_df: pd.DataFrame, debug: bool=False, dedup: bool=True) -> Tuple[pd.DataFrame, pd.DataFrame]:
         """
         Will sort the rows of the voxelwise DF and the covariate DF to make sure they are identically organized.
         Then will check that the columns are equivalent.
@@ -151,23 +151,42 @@ class CalvinFWEMap():
             
             shared_columns = list(set(voxel_cols).intersection(set(covariate_cols)))
             
-            if debug:
-                # Print shared columns for debugging
-                print("Shared Columns:", shared_columns)
-                
-                # Identify and print dropped columns
-                dropped_voxel_cols = set(voxel_df.columns) - set(shared_columns)
-                dropped_covariate_cols = set(covariate_df.columns) - set(shared_columns)
-                
-                if dropped_voxel_cols:
-                    print("Dropped Voxel Columns:", dropped_voxel_cols)
-                if dropped_covariate_cols:
-                    print("Dropped Covariate Columns:", dropped_covariate_cols)
         except:
             # Force Columns to Match
-            voxel_cols = set(voxel_df.columns.astype(str).sort_values().values)
-            covariate_cols = set(covariate_df.columns.astype(str).sort_values().values)
-            shared_columns = list(voxel_cols.intersection(covariate_cols))
+            voxel_cols = voxel_df.columns.astype(str).values
+            covariate_cols = covariate_df.columns.astype(str).values
+            
+            voxel_df.columns = voxel_cols
+            covariate_df.columns = covariate_cols
+                        
+            shared_columns = list(set(voxel_cols).intersection(set(covariate_cols)))
+        
+        if debug:
+            # Print shared columns for debugging
+            print("Shared Columns:", shared_columns)
+            
+            # Identify and print dropped columns
+            dropped_voxel_cols = set(voxel_df.columns) - set(shared_columns)
+            dropped_covariate_cols = set(covariate_df.columns) - set(shared_columns)
+            
+            if dropped_voxel_cols:
+                print("Dropped Voxel Columns:", dropped_voxel_cols)
+            if dropped_covariate_cols:
+                print("Dropped Covariate Columns:", dropped_covariate_cols)
+                
+        if dedup:
+            # Detect and print duplicate columns
+            voxel_duplicates = voxel_df.columns[voxel_df.columns.duplicated()].tolist()
+            covariate_duplicates = covariate_df.columns[covariate_df.columns.duplicated()].tolist()
+
+            if voxel_duplicates:
+                print("WARNING: duplicate columns in voxel_df:", voxel_duplicates)
+            if covariate_duplicates:
+                print("WARNING: duplicate columns in covariate_df:", covariate_duplicates)
+                
+            # Remove any potential duplicate columns
+            voxel_df = voxel_df.loc[:, ~voxel_df.columns.duplicated()]
+            covariate_df = covariate_df.loc[:, ~covariate_df.columns.duplicated()]
         
         # Align dataframes to shared columns
         aligned_voxel_df = voxel_df.loc[:, shared_columns]
@@ -359,9 +378,8 @@ class CalvinFWEMap():
         
         # Generate T-values for regression WITHOUT voxelwise variables.
         elif not vectorize and self.outcome_df is None:
-            print("Using statsmodels for voxelwise calculation of T-values of voxel ~ covariates")
             T = []
-            for voxel in range(Y.shape[1]):
+            for voxel in tqdm(range(Y.shape[1]), desc='Using statsmodels for voxelwise calculation of T-values of voxel ~ covariates'):
                 y_voxel = Y[:, voxel]
                 sm_model = sm.OLS(y_voxel, X).fit()
                 T.append(sm_model.tvalues)
@@ -372,10 +390,9 @@ class CalvinFWEMap():
         
         # Generate T-values for regression WITH voxelwise variables       
         elif self.outcome_df is not None:
-            print("Using statsmodels for voxelwise calculation of T-values of Outcome ~ voxel + covariates")
             T = []
             X, Y = self.prepare_voxelwise_dmatrix()
-            for voxel_i in range(self.neuroimaging_dataframe.shape[0]): #neuroimaging DF is in shape (voxels, observations)
+            for voxel_i in tqdm(range(self.neuroimaging_dataframe.shape[0]), desc="Using statsmodels for voxelwise calculation of T-values of Outcome ~ voxel + covariates"): #neuroimaging DF is in shape (voxels, observations)
                 voxel = self.neuroimaging_dataframe.iloc[voxel_i, :].values.T.reshape(-1, 1) #reshaping to (observation, voxels) for compat. w/ X
                 X_V = np.hstack((X, voxel)) # Finalize the design matrix
                 
@@ -388,19 +405,32 @@ class CalvinFWEMap():
             
     def run_lin_reg(self, X, Y, debug: bool=False):
         """Will run regression on X and Y arrays, entering as shape (observations, variable)"""
-        if not self.vectorize: # Voxelwise regression, suitable for regression of voxels on variables.
+        # Voxelwise regression, suitable for regression of voxels on variables.
+        if (not self.vectorize) and (self.outcome_df is not None): 
             R2 = []
-            for voxel_i in range(self.neuroimaging_dataframe.shape[0]): #neuroimaging DF is in shape (voxels, observations)
+            X, Y = self.prepare_voxelwise_dmatrix()
+            for voxel_i in tqdm(range(self.neuroimaging_dataframe.shape[0]), desc='Using statsmodels for voxelwise calculation of R2 of voxel ~ covariates'): #neuroimaging DF is in shape (voxels, observations)
                 voxel = self.neuroimaging_dataframe.iloc[voxel_i, :].values.T.reshape(-1, 1) #reshaping to (observation, voxels) for compat. w/ X
                 X_V = np.hstack((X, voxel)) # Finalize the design matrix
-                
                 model = sm.OLS(Y, X_V).fit() # fit model on a single voxel
                 R2.append(model.rsquared) 
             
             R2 = np.array(R2)  # Transpose to match expected shape
             SSE = None
+            
+        # Voxelwise regression, suitable for regression of variables on voxel.
+        elif (not self.vectorize) and (self.outcome_df is None): 
+            R2 = []
+            for voxel_i in tqdm(range(Y.shape[1]), desc='Using statsmodels for voxelwise calculation of R2 of voxel ~ covariates'): #neuroimaging DF is in shape (voxels, observations)
+                y_voxel = Y[:, voxel_i]
+                model = sm.OLS(y_voxel, X).fit()
+                R2.append(model.rsquared) 
+            
+            R2 = np.array(R2)  # Transpose to match expected shape
+            SSE = None
         
-        else: # Vectorized regression suitable for regression of Cov. on an entire nifti. 
+        # Vectorized regression suitable for regression of Cov. on an entire nifti. 
+        else: 
             # Fit model on control data across all voxels
             model = LinearRegression(fit_intercept=True)
             model.fit(X, Y)
@@ -563,16 +593,28 @@ class CalvinFWEMap():
         """
         n_covariates = self.T_arr.shape[1]
 
-        for i in range(n_covariates):
-            covariate_t_values = self.T_arr[:, i]
+        # Prepare the covariates, in order of appearance. 
+        if self.outcome_df is not None:  # Remove outcomes from the covariates if used as regressand
+            outcome_row = self.outcome_df.index[0]
+            covariates_df = self.variable_dataframe.drop(labels=outcome_row, axis=0)
+            covariate_names = list(covariates_df.index.values)
+        else: 
+            covariate_names = list(self.variable_dataframe.index.values)
             
-            # Get Covariate Name
-            if i == 0 and self.used_intercept: #if at initial value, check if is intercept
-                name = 'intercept'
-            elif i == range(n_covariates)[1] and self.outcome_df is not None: #if at final value, check if is voxelwise covariate
-                name = 'voxelwise'
-            else:
-                name = self.variable_dataframe.index[i-1]
+        # Extend covariate name list based on intercept
+        if self.used_intercept: 
+            covariate_names = ['intercept'] + covariate_names
+            n_covariates += 1
+           
+        # Extend covariate name list based on regression setup 
+        if self.outcome_df is not None:
+            covariate_names = covariate_names + ['voxelwise']
+            n_covariates += 1
+            
+        for i in range(0, len(covariate_names)): # Generate Name for each covariates
+            covariate_t_values = self.T_arr[:, i]
+            name = covariate_names[i]   
+
             # Convert to DataFrame
             covariate_df = pd.DataFrame(covariate_t_values, index=self.neuroimaging_dataframe.index)
 
