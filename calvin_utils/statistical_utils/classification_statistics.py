@@ -1,4 +1,3 @@
-from sklearn.metrics import accuracy_score, auc, roc_curve, accuracy_score, confusion_matrix, precision_recall_fscore_support
 from calvin_utils.statistical_utils.distribution_statistics import bootstrap_distribution_statistics
 from math import pi
 
@@ -7,6 +6,8 @@ import numpy as np
 import seaborn as sns
 import pandas as pd
 import matplotlib.pyplot as plt
+from sklearn.metrics import accuracy_score, auc, roc_curve, accuracy_score, confusion_matrix, precision_recall_fscore_support, precision_recall_curve, average_precision_score, matthews_corrcoef, confusion_matrix
+
 
 class BinaryDataMetricsPlotter:
     def __init__(self, dataframe, mapping_dict, specified_metrics=None, out_dir=None, cm_normalization=None):
@@ -464,176 +465,8 @@ class MulticlassClassificationEvaluation:
         self.raw_observations = self.outcome_matrix.to_numpy()
         self.observations = self.raw_observations.argmax(1) 
         self.observations_df = pd.DataFrame(self.raw_observations, columns = self.outcome_matrix.columns)
-        
-    def calculate_confusion_matrix(self, debug=False):
-        """Calculates the confusion matrix from predictions and observations."""
-        if debug:
-            print(self.observations, self.predictions)
-        if self.assign_labels:
-            self.conf_matrix = confusion_matrix(self.observations, self.predictions, normalize=self.normalization)
-        else:
-            # Create a mapping from indices to label names
-            index_to_label = {index: label for index, label in enumerate(self.observations_df.columns)}
-            observations_labels = [index_to_label[idx] for idx in self.observations]
-            predictions_labels = [index_to_label[idx] for idx in self.predictions]
-            self.conf_matrix = confusion_matrix(observations_labels, predictions_labels, normalize=self.normalization, labels=self.observations_df.columns.to_list())
-        
-    def extract_confusion_components(self):
-        """Extracts True Positive, True Negative, False Positive, and False Negative counts from the confusion matrix."""
-        self.TP = self.conf_matrix[1, 1]
-        self.TN = self.conf_matrix[0, 0]
-        self.FP = self.conf_matrix[0, 1]
-        self.FN = self.conf_matrix[1, 0]
-    
-    def calculate_multiclass_metrics(self):
-        """
-        Getting typical metrics for a multiclass classification is a little more challenging. 
-        We calculate the given metric for each class, derived from it's TP/FN/FP/TN
-        Then average those metrics together (mean(sens), mean(spec), etc.)
-        
-        This is a one versus all approach. 
-        
-        Accuracy is simply the diagnoal versus the off-diagonal.
-        
-        True Positives (TP):
-            Definition: The number of times a class was predicted correctly as itself.
-            Calculation: For a given class i, it's the value at self.conf_matrix[i, i] — the diagonal element for that class.
-            Why it works: The diagonal of the confusion matrix represents correct predictions.
-        False Negatives (FN):
-            Definition: The number of times a class was incorrectly predicted as some other class.
-            Calculation: For a given class i, it's the sum of the ith row, excluding the diagonal element, np.sum(self.conf_matrix[i, :]) - self.conf_matrix[i, i].
-            Why it works: The row for class i contains all the actual instances of class i. Excluding the TP (diagonal element), the rest are instances where class i was not recognized correctly.
-        False Positives (FP):
-            Definition: The number of times other classes were incorrectly predicted as class i.
-            Calculation: For a given class i, it's the sum of the ith column, excluding the diagonal element, np.sum(self.conf_matrix[:, i]) - self.conf_matrix[i, i].
-            Why it works: The column for class i contains all the predictions made as class i. Excluding the TP (diagonal element), the rest are instances where another class was incorrectly labeled as class i.
-        True Negatives (TN):
-            Definition: The number of times all other classes were correctly predicted as not being class i.
-            Calculation: For a given class i, it's the sum of all elements in the matrix, excluding the ith row and ith column. This can be calculated by np.sum(self.conf_matrix) - (TP + FN + FP).
-            Why it works: TN is the most complex to understand because it involves the rest of the matrix excluding the row and column of the class in question. This represents all the instances where other classes were correctly not labeled as class i.
-        """
-        # Initialize arrays to hold the metric values for each class
-        sensitivity = []
-        specificity = []
-        ppv = []
-        npv = []
-        # The number of classes is determined by the size of the confusion matrix
-        num_classes = len(self.conf_matrix)
-
-        # Calculate metrics for each class using a one-vs-all approach
-        for class_index in range(num_classes):
-            # True Positives (TP): Diagonal element for the current class
-            TP = self.conf_matrix[class_index, class_index]
-            # False Negatives (FN): Sum of the current class row excluding TP
-            FN = np.sum(self.conf_matrix[class_index, :]) - TP
-            # False Positives (FP): Sum of the current class column excluding TP
-            FP = np.sum(self.conf_matrix[:, class_index]) - TP
-            # True Negatives (TN): Sum of all elements excluding the current class row and column
-            TN = np.sum(self.conf_matrix) - (TP + FN + FP)
-            
-            # Sensitivity (Recall) for the current class
-            class_sensitivity = TP / (TP + FN) if (TP + FN) > 0 else 0
-            sensitivity.append(class_sensitivity)
-            # Specificity for the current class
-            class_specificity = TN / (TN + FP) if (TN + FP) > 0 else 0
-            specificity.append(class_specificity)
-            # Positive Predictive Value (Precision) for the current class
-            class_PPV = TP / (TP + FP) if (TP + FP) > 0 else 0
-            ppv.append(class_PPV)
-            # Negative Predictive Value for the current class
-            class_NPV = TN / (TN + FN) if (TN + FN) > 0 else 0
-            npv.append(class_NPV)
-
-        # Calculate the average of the metrics across all classes
-        self.sensitivity = np.mean(sensitivity)
-        self.specificity = np.mean(specificity)
-        self.PPV = np.mean(ppv)
-        self.NPV = np.mean(npv)
-        
-    def calculate_metrics(self):
-        """Calculates accuracy, sensitivity, specificity, PPV, and NPV based on the confusion matrix components."""
-        # This is for binary classifications
-        if len(self.outcome_matrix.columns) < 2:
-            self.accuracy = (self.TP + self.TN) / (self.TP + self.TN + self.FP + self.FN)
-            self.sensitivity = self.TP / (self.TP + self.FN)
-            self.specificity = self.TN / (self.TN + self.FP)
-            self.PPV = self.TP / (self.TP + self.FP)
-            self.NPV = self.TN / (self.TN + self.FN)
-        else:
-            print("Multiclass problem detected. Using One Vs. All approach for diagnostics.")
-            self.accuracy = np.trace(self.conf_matrix) / np.sum(self.conf_matrix)
-            self.calculate_multiclass_metrics()
-
-    def display_metrics(self):
-        """Prints the calculated evaluation metrics."""
-        print("Accuracy:", self.accuracy)
-        print("Sensitivity:", self.sensitivity)
-        print("Specificity:", self.specificity)
-        print("PPV:", self.PPV)
-        print("NPV:", self.NPV)
-        
-    def plot_confusion_matrix(self):
-        """Plots a heatmap of the confusion matrix."""
-        if self.assign_labels:
-            # We follow the order of confusion matrix.
-            unique_indices = np.unique(self.observations)
-            labels = [self.observations_df.columns[index] for index in unique_indices]
-        else:
-            # We follow the order we forced confusion matrix to use. 
-            labels = self.observations_df.columns.to_list()
-       
-        plt.figure(figsize=(8, 6))
-        sns.heatmap(self.conf_matrix, annot=True, fmt=".2f", cmap="Blues", xticklabels=labels, yticklabels=labels)
-        plt.xlabel("Predicted label")
-        plt.ylabel("True label")
-        plt.title("Normalized Confusion Matrix" if self.normalization else "Confusion Matrix")
-        if self.out_dir:
-            os.makedirs(self.out_dir, exist_ok=True)
-            plt.savefig(os.path.join(self.out_dir, "confusion_matrix.png"))
-            plt.savefig(os.path.join(self.out_dir, "confusion_matrix.svg"))
-        plt.show()
-        
-    def plot_radar_chart(self):
-        """
-        Generates and displays a radar chart for the calculated evaluation metrics.
-        """
-        # Define the metrics and their corresponding angles on the radar chart
-        categories = ['Accuracy', 'Sensitivity', 'Specificity', 'PPV', 'NPV']
-        values = [self.accuracy, self.sensitivity, self.specificity, self.PPV, self.NPV]
-        N = len(categories)
-
-        # Repeat the first value to close the circle in the radar chart
-        values += values[:1]
-
-        # Calculate angle for each category
-        angles = [n / float(N) * 2 * np.pi for n in range(N)]
-        angles += angles[:1]  # Complete the loop
-
-        # Plot setup
-        fig, ax = plt.subplots(figsize=(6, 6), subplot_kw=dict(polar=True))
-        plt.xticks(angles[:-1], categories, color='black', size=12)
-
-        # Draw one axe per variable + add labels
-        plt.yticks([0.2, 0.4, 0.6, 0.8], ["0.2", "0.4", "0.6", "0.8"], color="grey", size=8)
-        plt.ylim(0, 1)
-
-        # Plot data
-        ax.plot(angles, values, linewidth=1, linestyle='solid', label='Metrics')
-
-        # Fill area
-        ax.fill(angles, values, 'b', alpha=0.1)
-
-        # Add a title and a legend and display the plot
-        plt.title('Model Evaluation Metrics', size=15, color='black', y=1.1)
-        plt.legend(loc='upper right', bbox_to_anchor=(0.1, 0.1))
-
-        # Save plot if an output directory is specified
-        if self.out_dir:
-            os.makedirs(self.out_dir, exist_ok=True)
-            plt.savefig(os.path.join(self.out_dir, "model_evaluation_radar_chart.png"))
-            plt.savefig(os.path.join(self.out_dir, "model_evaluation_radar_chart.svg"))
-
-        plt.show()
+        for col in self.observations_df.columns:
+            print(f"There are {np.sum(self.observations_df[col])} observations for {col}")
         
     def rasterized_probability_plot(self, probability_of_correct_class=True):
         """
@@ -644,7 +477,7 @@ class MulticlassClassificationEvaluation:
         If probability_of_correct_class is True, plot the probability of the true class for incorrect predictions.
         """
         n_classes = self.outcome_matrix.shape[1]
-        colors = sns.color_palette("tab10") if n_classes <= 10 else sns.color_palette("hsv", n_classes)
+        colors = sns.color_palette("tab10") if n_classes <= 10 else sns.color_palette("tab20", n_classes)
         
         fig, axs = plt.subplots(2, 1, figsize=(10, 6), sharex=True)
 
@@ -689,25 +522,165 @@ class MulticlassClassificationEvaluation:
         """Orchestrates the calculation and display of all evaluation metrics."""
         self.get_predictions()
         self.get_observations()
-        self.calculate_confusion_matrix()
-        self.extract_confusion_components()
-        self.calculate_metrics()
-        self.display_metrics()
-        self.plot_confusion_matrix()
-        self.plot_radar_chart()
         self.rasterized_probability_plot()
 
 class MulticlassOneVsAllROC(MulticlassClassificationEvaluation):
     """
-    Extends ModelEvaluation to include ROC curve generation for each class
+    Extends MulticlassClassificationEvaluation to include ROC curve generation for each class
     in a multinomial logistic regression model.
+    
+    See https://scikit-learn.org/stable/auto_examples/model_selection/plot_roc.html fore more information.
     """
+    def plot_radar_chart(self, metrics_df, classification='Micro-average', columns=['Acc', 'Sens', 'Spec', 'PPV', 'NPV']):
+        """
+        Generates and displays a radar chart for the calculated evaluation metrics.
+        
+        Parameters:
+        metrics_df (pd.DataFrame): DataFrame containing the metrics for each class and the micro-average.
+        out_dir (str, optional): Directory where the radar chart image will be saved. If None, the plot will not be saved.
+        """
+        # Select the micro-average row
+        micro_avg_metrics = metrics_df[metrics_df['Class'] == classification].iloc[0]
+        
+        # Define the metrics and their corresponding angles on the radar chart
+        values = [micro_avg_metrics[metric] for metric in columns]
+        N = len(columns)
+
+        # Repeat the first value to close the circle in the radar chart
+        values += values[:1]
+
+        # Calculate angle for each category
+        angles = [n / float(N) * 2 * np.pi for n in range(N)]
+        angles += angles[:1]  # Complete the loop
+
+        # Plot setup
+        fig, ax = plt.subplots(figsize=(6, 6), subplot_kw=dict(polar=True))
+        plt.xticks(angles[:-1], columns, color='black', size=12)
+
+        # Draw one axe per variable + add labels
+        plt.yticks([0.2, 0.4, 0.6, 0.8], ["0.2", "0.4", "0.6", "0.8"], color="black", size=10)
+        plt.ylim(0, 1)
+
+        # Plot data
+        ax.plot(angles, values, linewidth=1, linestyle='solid', label='Micro-average Metrics')
+
+        # Fill area
+        ax.fill(angles, values, 'b', alpha=0.1)
+
+        # Add a title and a legend and display the plot
+        plt.title('Micro-average Model Evaluation Metrics', size=15, color='black', y=1.1)
+        plt.legend(loc='upper right', bbox_to_anchor=(0.1, 0.1))
+
+        # Save plot if an output directory is specified
+        if self.out_dir:
+            plt.savefig(os.path.join(self.out_dir, "model_performance_radar_chart.svg"))
+
+        plt.show()
+        
     def plot_confusion_matrix(self):
-        pass
+        labels = self.observations_df.columns
+        conf_matrix = confusion_matrix(self.observations, self.predictions, normalize=self.normalization) #set the indices to actually be labels
+        # Plot the confusion matrix
+        plt.figure(figsize=(8, 6))
+        if self.normalization is None:
+            digit_fmt = '1g'
+        else:
+            digit_fmt = '.2f'
+        sns.heatmap(conf_matrix, annot=True, fmt=digit_fmt, xticklabels=labels, yticklabels=labels, cmap="viridis")
+        plt.xlabel('Predicted label')
+        plt.ylabel('True label')
+        plt.title('Confusion Matrix')
+        if self.out_dir:
+            plt.savefig(os.path.join(self.out_dir, 'confusion_matrix.svg'))
+        plt.show()
+        
+        self.conf_matrix=conf_matrix
+        
+    def calculate_metrics(self):
+        """
+        Calculate performance metrics for each class and the micro-average from a confusion matrix.
+
+        Returns:
+        pd.DataFrame: DataFrame containing the metrics for each class and the micro-average.
+        """
+        metrics = {
+            'Class': [],
+            'TP': [],
+            'FP': [],
+            'TN': [],
+            'FN': [],
+            'Acc': [],
+            'Sens': [],
+            'Spec': [],
+            'NPV': [],
+            'PPV': [],
+            'F1': []
+            }
+        # Get calculations for each class
+        for i, col in enumerate(self.observations_df.columns):
+            # Class specific confusion matrix
+            TP = self.conf_matrix[i, i]
+            FN = self.conf_matrix[i, :].sum() - TP
+            FP = self.conf_matrix[:, i].sum() - TP
+            TN = self.conf_matrix.sum() - (TP + FP + FN)
+            
+            # Class specific metrics
+            Acc = (TP + TN) / (TP + FP + TN + FN)
+            Sens = TP / (TP + FN) if (TP + FN) != 0 else 0
+            Spec = TN / (TN + FP) if (TN + FP) != 0 else 0
+            PPV = TP / (TP + FP) if (TP + FP) != 0 else 0
+            NPV = TN / (TN + FN) if (TN + FN) != 0 else 0
+            F1 = 2 * TP / (2 * TP + FP + FN) if (2 * TP + FP + FN) != 0 else 0
+            
+            metrics['Class'].append(col)
+            metrics['TP'].append(TP)
+            metrics['FP'].append(FP)
+            metrics['TN'].append(TN)
+            metrics['FN'].append(FN)
+            metrics['Acc'].append(Acc)
+            metrics['Sens'].append(Sens)
+            metrics['Spec'].append(Spec)
+            metrics['NPV'].append(NPV)
+            metrics['PPV'].append(PPV)
+            metrics['F1'].append(F1)
+        
+        # Calculate micro-average confusion matrix
+        TP_micro = np.sum(metrics['TP'])
+        FN_micro = np.sum(metrics['FN'])
+        FP_micro = np.sum(metrics['FP'])
+        TN_micro = np.sum(metrics['TN'])
+        
+        # Calculate micro-average classification metrics
+        Acc_micro = (TP_micro + TN_micro) / (TP_micro + FP_micro + TN_micro + FN_micro)
+        Sens_micro = TP_micro / (TP_micro + FN_micro) if (TP_micro + FN_micro) != 0 else 0
+        Spec_micro = TN_micro / (TN_micro + FP_micro) if (TN_micro + FP_micro) != 0 else 0
+        PPV_micro = TP_micro / (TP_micro + FP_micro) if (TP_micro + FP_micro) != 0 else 0
+        NPV_micro = TN_micro / (TN_micro + FN_micro) if (TN_micro + FN_micro) != 0 else 0
+        F1_micro = 2 * TP_micro / (2 * TP_micro + FP_micro + FN_micro) if (2 * TP_micro + FP_micro + FN_micro) != 0 else 0
+        
+        metrics['Class'].append('Micro-average')
+        metrics['TP'].append(TP_micro)
+        metrics['FP'].append(FP_micro)
+        metrics['TN'].append(TN_micro)
+        metrics['FN'].append(FN_micro)
+        metrics['Acc'].append(Acc_micro)
+        metrics['Sens'].append(Sens_micro)
+        metrics['Spec'].append(Spec_micro)
+        metrics['NPV'].append(NPV_micro)
+        metrics['PPV'].append(PPV_micro)
+        metrics['F1'].append(F1_micro)
+
+        metrics_df = pd.DataFrame(metrics)
+        display(metrics_df)
+        return metrics_df
     
     def plot_roc_curves(self):
         """
         Plots ROC curves for each class using a One-vs-Rest approach.
+        For each class (i), observation_i and prediction_i are calculated.
+        This describes how one class' predictions discriminate it from all other classes. 
+        However, it neglects the fact that there may have been another prediction which was superior to it. 
+        Thus, to address this, you need to do a micro-average and macro-average ROC, as this is not the full story. 
         """
         n_classes = self.outcome_matrix.shape[1]
         # Compute ROC curve and ROC area for each class
@@ -722,9 +695,8 @@ class MulticlassOneVsAllROC(MulticlassClassificationEvaluation):
         
         # Plot all ROC curves
         plt.figure()
-        
-        colors = iter(sns.color_palette("hsv", n_classes))
-        for i, color in zip(range(n_classes), colors):
+        palette = sns.color_palette("tab10") if n_classes <= 10 else sns.color_palette("tab20", n_classes)
+        for i, color in zip(range(n_classes), palette):
             try:
                 category = self.outcome_matrix.columns[i]
             except:
@@ -732,6 +704,16 @@ class MulticlassOneVsAllROC(MulticlassClassificationEvaluation):
             plt.plot(fpr[i], tpr[i], color=color, lw=2,
                      label=f'ROC curve of class {category}' + ' (area = {1:0.2f})'
                      ''.format(i, roc_auc[i]))
+        
+        # PLOT MICRO-AVERAGE ROC CURVE
+        if self.results is not None:
+            fpr, tpr, _ = roc_curve(self.outcome_matrix.to_numpy().ravel(), self.results.predict().ravel()) #??self.results.predict().ravel(). this was previously results.to_numpy().ravel().
+        else:      
+            # outcomes, predictions = self.prepare_micro_average_dfs()    
+            fpr, tpr, thresholds = roc_curve(self.observations_df.to_numpy().ravel(), self.predictions_df.to_numpy().ravel())
+        micro_roc_auc = auc(fpr, tpr)
+        plt.plot(fpr, tpr, label=f'Micro Avg. (area = {micro_roc_auc:0.2f})'
+                 ''.format(roc_auc), color='k', linestyle=':', linewidth=2)
         
         plt.plot([0, 1], [0, 1], 'k--', lw=2)
         plt.xlim([0.0, 1.0])
@@ -776,18 +758,22 @@ class MulticlassOneVsAllROC(MulticlassClassificationEvaluation):
         super().run()
         self.plot_roc_curves()
         self.find_optimal_thresholds()
+        self.plot_confusion_matrix()
+        metrics_df = self.calculate_metrics()
+        self.plot_radar_chart(metrics_df)
+        return metrics_df
 
 class MacroAverageROC(MulticlassOneVsAllROC):
     """
     Extends MulticlassModelEvaluation to include the generation of a macro-average ROC curve
     for a multinomial logistic regression model.
     """
-    
     def plot_macro_average_roc_curve(self):
         """
         Plots a macro-average ROC curve for the multinomial logistic regression model.
         
         This is like a meta-analytic ROC, but it averages all ROCs together with equal weight.
+        This takes the AUROC for each class, then averages them. 
         """
         n_classes = self.outcome_matrix.shape[1]
         # Compute ROC curve and ROC area for each class
@@ -799,7 +785,7 @@ class MacroAverageROC(MulticlassOneVsAllROC):
             if self.results is not None:
                 fpr, tpr, _ = roc_curve(self.outcome_matrix.iloc[:, i], self.results.predict()[:, i])
             else:
-                fpr, tpr, _ = roc_curve(self.outcome_matrix[:, i], self.predictions[:, i])
+                fpr, tpr, _ = roc_curve(self.outcome_matrix.iloc[:, i], self.predictions_df.iloc[:, i])
             
             mean_tpr += np.interp(all_fpr, fpr, tpr)
         
@@ -841,8 +827,8 @@ class MicroAverageROC(MacroAverageROC):
     for a multinomial logistic regression model.
     
     This is like a meta-analytic ROC. It averages the ROC curves, but with respect to sample weight. 
+    See https://scikit-learn.org/stable/auto_examples/model_selection/plot_roc.html fore more information.
     """
-    
     def plot_micro_average_roc_curve(self):
         """
         Plots a micro-average ROC curve for the multinomial logistic regression model.
@@ -850,9 +836,10 @@ class MicroAverageROC(MacroAverageROC):
         n_classes = self.outcome_matrix.shape[1]
         # Aggregate all false positive rates and true positive rates
         if self.results is not None:
-            fpr, tpr, _ = roc_curve(self.outcome_matrix.to_numpy().ravel(), self.results.to_numpy().ravel())
-        else:            
-            fpr, tpr, thresholds = roc_curve(self.outcome_matrix.to_numpy().ravel(), self.results.predict().ravel())
+            fpr, tpr, _ = roc_curve(self.outcome_matrix.to_numpy().ravel(), self.results.predict().ravel()) #??self.results.predict().ravel(). this was previously results.to_numpy().ravel().
+        else:      
+            # outcomes, predictions = self.prepare_micro_average_dfs()    
+            fpr, tpr, thresholds = roc_curve(self.observations_df.to_numpy().ravel(), self.predictions_df.to_numpy().ravel())
         
         roc_auc = auc(fpr, tpr)
         
@@ -879,11 +866,111 @@ class MicroAverageROC(MacroAverageROC):
         Orchestrates the evaluation including both the macro-average and micro-average ROC curves.
         """
         super().run()
-        # self.plot_macro_average_roc_curve()
         self.plot_micro_average_roc_curve()
+        
+class MulticlassAUPRC(MicroAverageROC):
+    '''
+    for more info, see: https://glassboxmedicine.com/2019/03/02/measuring-performance-auprc/
+    '''
+    def plot_one_vs_all_auprc(self):
+        """
+        Plots the one-versus-all Precision-Recall curve for each class and includes iso-F1 curves.
+        """
+        n_classes = self.outcome_matrix.shape[1]
+        colors = plt.get_cmap('tab10') if n_classes <= 10 else plt.get_cmap('tab20')
+        
+        plt.figure(figsize=(10, 8))
+        
+        # Compute PR curve and AUPRC for each class
+        for i in range(n_classes):
+            if self.results is not None:
+                precision, recall, _ = precision_recall_curve(self.outcome_matrix.iloc[:, i], self.results.predict()[:, i])
+            else:
+                precision, recall, _ = precision_recall_curve(self.outcome_matrix.iloc[:, i], self.predictions_df.iloc[:, i])
+            expected = np.sum(self.outcome_matrix.iloc[:, i]) / self.outcome_matrix.shape[0]
+            
+            plt.plot(recall, precision, color=colors(i), lw=2, label=f'{self.outcome_matrix.columns[i]} (area = {auc(recall, precision):.2f} | expected = {expected:.2f})')
+        
+        # calculate the micro-average
+        if self.results is not None:
+            precision, recall, _ = precision_recall_curve(self.observations_df.to_numpy().ravel(),self.results.predict().ravel()) #??self.results.predict().ravel(). this was previously results.to_numpy().ravel().
+        else:      
+            # outcomes, predictions = self.prepare_micro_average_dfs()    
+            precision, recall, _ = precision_recall_curve(self.observations_df.to_numpy().ravel(), self.predictions_df.to_numpy().ravel())
+        expected = np.sum(self.observations_df.to_numpy().ravel()) / len(self.observations_df.to_numpy().ravel())
+        plt.plot(recall, precision,  color='k', lw=2, label=f'Micro Avg. (area = {auc(recall, precision):.2f} | expected = {expected:.2f})')
+        
+        plt.xlabel('Recall')
+        plt.ylabel('Precision')
+        plt.ylim((0,1))
+        plt.xlim((0,1))
+        plt.title('One-Versus-All Precision-Recall Curves')
+        plt.legend(loc='best')
+        if self.out_dir:
+            plt.savefig(os.path.join(self.out_dir, 'ova_auprc.svg'))
+        plt.show()
+        
+        
+    def plot_macro_average_auprc(self):
+        """
+        Plots a macro-average Precision-Recall curve for the multinomial logistic regression model.
 
-class ComprehensiveMulticlassROC(MicroAverageROC):
+        This averages all PR curves together with equal weight.
+        """
+
+        n_classes = self.outcome_matrix.shape[1]
+        all_recall = np.linspace(0, 1, 100)
+        mean_precision = np.zeros_like(all_recall)
+        mean_expected = 0
+
+        # Compute PR curve and AUPRC for each class
+        for i in range(n_classes):
+            if self.results is not None:
+                precision, recall, _ = precision_recall_curve(self.outcome_matrix.iloc[:, i], self.results.predict()[:, i])
+            else:
+                precision, recall, _ = precision_recall_curve(self.outcome_matrix.iloc[:, i], self.predictions_df.iloc[:, i])
+            expected = np.sum(self.outcome_matrix.iloc[:, i]) / self.outcome_matrix.shape[0]
+            
+            # Interpolate all PR curves at these points
+            mean_precision += np.interp(all_recall, recall[::-1], precision[::-1])
+            mean_expected += expected
+
+        # Average it
+        mean_expected /= n_classes
+        mean_precision /= n_classes
+        mean_auprc = auc(all_recall, mean_precision)
+
+        # Calculate the number of true positives and observations
+        tp = np.sum(self.outcome_matrix, axis=0)
+        obs = self.outcome_matrix.shape[0]
+
+        # Calculate F1 score based on TP/Obs
+        f1_scores = tp / obs
+
+        # Plot the macro-average PR curve
+        plt.figure(figsize=(10, 8))
+        plt.plot(all_recall, mean_precision, color='k', lw=2, label=f'Macro Avg. (area = {mean_auprc:.2f} | expected ] {mean_expected:.2f})')
+
+        plt.xlabel('Recall (Sensitivity)')
+        plt.ylabel('Precision (PPV)')
+        plt.ylim((0,1))
+        plt.xlim((0,1))
+        plt.title('Macro-Average Precision-Recall Curve')
+        plt.legend(loc='best')
+        if self.out_dir:
+            plt.savefig(os.path.join(self.out_dir, 'macro_average_auprc.svg'))
+        plt.show()
+    
+    def run(self):
+        super().run()
+        self.plot_macro_average_auprc()
+        self.plot_one_vs_all_auprc()
+
+
+class ComprehensiveMulticlassROC(MulticlassAUPRC):
     """
+    **SEE THE DOCS FOR MulticlassClassificationEvaluation TO UNDERSTAND HOW TO CALL THIS**
+    
     Extends ClassificationEvaluation to include ROC curve generation for a multinomial logistic regression model.
     
     ROC Curves Included:
@@ -901,6 +988,7 @@ class ComprehensiveMulticlassROC(MicroAverageROC):
       false positives, true negatives, and false negatives across all classes before calculating TPR and FPR. The 
       micro-average ROC curve is especially useful in datasets with class imbalance, as it reflects the model's 
       performance across all instances, but biases towards more highly represented classes.
+      
     """
     def run(self):
         """
