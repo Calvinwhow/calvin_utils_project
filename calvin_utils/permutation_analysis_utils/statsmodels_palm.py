@@ -87,6 +87,8 @@ class CalvinStatsmodelsPalm(CalvinPalm):
         elif condition == 'not':
             other_df = self.df[self.df[column] != value]
             self.df = self.df[self.df[column] == value]
+        elif condition is None: 
+            return self.df, None
         else:
             raise ValueError(f"Condition '{condition}' is not supported.")
         

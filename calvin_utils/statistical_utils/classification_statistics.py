@@ -511,7 +511,7 @@ class MulticlassClassificationEvaluation:
             axs[1].legend(custom_lines, [f'{self.outcome_matrix.columns[i]}' for i in range(n_classes)], title='True Class', bbox_to_anchor=(1.05, 1), loc='upper left')
         else:
             axs[1].legend(custom_lines, [f'Class {i}' for i in range(n_classes)], title='True Class', bbox_to_anchor=(1.05, 1), loc='upper left')
-            
+        
         plt.tight_layout()
         if self.out_dir:
             plt.savefig(os.path.join(self.out_dir, "rasterized_probabilities.png"))
@@ -556,25 +556,19 @@ class MulticlassOneVsAllROC(MulticlassClassificationEvaluation):
         # Plot setup
         fig, ax = plt.subplots(figsize=(6, 6), subplot_kw=dict(polar=True))
         plt.xticks(angles[:-1], columns, color='black', size=12)
-
         # Draw one axe per variable + add labels
         plt.yticks([0.2, 0.4, 0.6, 0.8], ["0.2", "0.4", "0.6", "0.8"], color="black", size=10)
         plt.ylim(0, 1)
-
         # Plot data
         ax.plot(angles, values, linewidth=1, linestyle='solid', label='Micro-average Metrics')
-
         # Fill area
         ax.fill(angles, values, 'b', alpha=0.1)
-
         # Add a title and a legend and display the plot
         plt.title('Micro-average Model Evaluation Metrics', size=15, color='black', y=1.1)
         plt.legend(loc='upper right', bbox_to_anchor=(0.1, 0.1))
-
         # Save plot if an output directory is specified
         if self.out_dir:
             plt.savefig(os.path.join(self.out_dir, "model_performance_radar_chart.svg"))
-
         plt.show()
         
     def plot_confusion_matrix(self):
@@ -671,10 +665,9 @@ class MulticlassOneVsAllROC(MulticlassClassificationEvaluation):
         metrics['F1'].append(F1_micro)
 
         metrics_df = pd.DataFrame(metrics)
-        display(metrics_df)
         return metrics_df
     
-    def plot_roc_curves(self):
+    def plot_roc_curves(self, silent=False):
         """
         Plots ROC curves for each class using a One-vs-Rest approach.
         For each class (i), observation_i and prediction_i are calculated.
@@ -694,16 +687,17 @@ class MulticlassOneVsAllROC(MulticlassClassificationEvaluation):
             roc_auc[i] = auc(fpr[i], tpr[i])
         
         # Plot all ROC curves
-        plt.figure()
-        palette = sns.color_palette("tab10") if n_classes <= 10 else sns.color_palette("tab20", n_classes)
-        for i, color in zip(range(n_classes), palette):
-            try:
-                category = self.outcome_matrix.columns[i]
-            except:
-                category = i
-            plt.plot(fpr[i], tpr[i], color=color, lw=2,
-                     label=f'ROC curve of class {category}' + ' (area = {1:0.2f})'
-                     ''.format(i, roc_auc[i]))
+        if not silent: 
+            plt.figure()
+            palette = sns.color_palette("tab10") if n_classes <= 10 else sns.color_palette("tab20", n_classes)
+            for i, color in zip(range(n_classes), palette):
+                try:
+                    category = self.outcome_matrix.columns[i]
+                except:
+                    category = i
+                plt.plot(fpr[i], tpr[i], color=color, lw=2,
+                        label=f'ROC curve of class {category}' + ' (area = {1:0.2f})'
+                        ''.format(i, roc_auc[i]))
         
         # PLOT MICRO-AVERAGE ROC CURVE
         if self.results is not None:
@@ -712,23 +706,24 @@ class MulticlassOneVsAllROC(MulticlassClassificationEvaluation):
             # outcomes, predictions = self.prepare_micro_average_dfs()    
             fpr, tpr, thresholds = roc_curve(self.observations_df.to_numpy().ravel(), self.predictions_df.to_numpy().ravel())
         micro_roc_auc = auc(fpr, tpr)
-        plt.plot(fpr, tpr, label=f'Micro Avg. (area = {micro_roc_auc:0.2f})'
-                 ''.format(roc_auc), color='k', linestyle=':', linewidth=2)
         
-        plt.plot([0, 1], [0, 1], 'k--', lw=2)
-        plt.xlim([0.0, 1.0])
-        plt.ylim([0.0, 1.05])
-        plt.xlabel('False Positive Rate')
-        plt.ylabel('True Positive Rate')
-        plt.title('One-vs-Rest ROC Curves')
-        plt.legend(loc="lower right")
-        
-        # Save plot if an output directory is specified
-        if self.out_dir:
-            os.makedirs(self.out_dir, exist_ok=True)
-            plt.savefig(os.path.join(self.out_dir, "roc_ovr.png"))
-            plt.savefig(os.path.join(self.out_dir, "roc_ovr.svg"))
-        plt.show()
+        if not silent:
+            plt.plot(fpr, tpr, label=f'Micro Avg. (area = {micro_roc_auc:0.2f})'
+                    ''.format(roc_auc), color='k', linestyle=':', linewidth=2)
+            plt.plot([0, 1], [0, 1], 'k--', lw=2)
+            plt.xlim([0.0, 1.0])
+            plt.ylim([0.0, 1.05])
+            plt.xlabel('False Positive Rate')
+            plt.ylabel('True Positive Rate')
+            plt.title('One-vs-Rest ROC Curves')
+            plt.legend(loc="lower right")
+            # Save plot if an output directory is specified
+            if self.out_dir:
+                os.makedirs(self.out_dir, exist_ok=True)
+                plt.savefig(os.path.join(self.out_dir, "roc_ovr.png"))
+                plt.savefig(os.path.join(self.out_dir, "roc_ovr.svg"))
+            plt.show()
+        return micro_roc_auc
         
     def find_optimal_thresholds(self):
         """
@@ -799,7 +794,7 @@ class MacroAverageROC(MulticlassOneVsAllROC):
         # Plot the macro-average ROC curve
         plt.figure()
         plt.plot(fpr, tpr, label='Macro-average ROC curve (area = {0:0.2f})'
-                 ''.format(roc_auc), color='navy', linestyle=':', linewidth=4)
+                ''.format(roc_auc), color='navy', linestyle=':', linewidth=4)
         
         plt.plot([0, 1], [0, 1], 'k--', lw=2)
         plt.xlim([0.0, 1.0])
@@ -842,11 +837,10 @@ class MicroAverageROC(MacroAverageROC):
             fpr, tpr, thresholds = roc_curve(self.observations_df.to_numpy().ravel(), self.predictions_df.to_numpy().ravel())
         
         roc_auc = auc(fpr, tpr)
-        
         # Plot the micro-average ROC curve
         plt.figure()
         plt.plot(fpr, tpr, label='Micro-average ROC curve (area = {0:0.2f})'
-                 ''.format(roc_auc), color='deeppink', linestyle=':', linewidth=4)
+                ''.format(roc_auc), color='deeppink', linestyle=':', linewidth=4)
         
         plt.plot([0, 1], [0, 1], 'k--', lw=2)
         plt.xlim([0.0, 1.0])
@@ -888,7 +882,6 @@ class MulticlassAUPRC(MicroAverageROC):
             else:
                 precision, recall, _ = precision_recall_curve(self.outcome_matrix.iloc[:, i], self.predictions_df.iloc[:, i])
             expected = np.sum(self.outcome_matrix.iloc[:, i]) / self.outcome_matrix.shape[0]
-            
             plt.plot(recall, precision, color=colors(i), lw=2, label=f'{self.outcome_matrix.columns[i]} (area = {auc(recall, precision):.2f} | expected = {expected:.2f})')
         
         # calculate the micro-average
@@ -898,8 +891,8 @@ class MulticlassAUPRC(MicroAverageROC):
             # outcomes, predictions = self.prepare_micro_average_dfs()    
             precision, recall, _ = precision_recall_curve(self.observations_df.to_numpy().ravel(), self.predictions_df.to_numpy().ravel())
         expected = np.sum(self.observations_df.to_numpy().ravel()) / len(self.observations_df.to_numpy().ravel())
-        plt.plot(recall, precision,  color='k', lw=2, label=f'Micro Avg. (area = {auc(recall, precision):.2f} | expected = {expected:.2f})')
         
+        plt.plot(recall, precision,  color='k', lw=2, label=f'Micro Avg. (area = {auc(recall, precision):.2f} | expected = {expected:.2f})')
         plt.xlabel('Recall')
         plt.ylabel('Precision')
         plt.ylim((0,1))
@@ -995,8 +988,13 @@ class ComprehensiveMulticlassROC(MulticlassAUPRC):
         Orchestrates the evaluation including both the macro-average and micro-average ROC curves.
         """
         super().run()
-                
 
+    def get_micro_auc(self):
+        self.get_predictions()
+        self.get_observations()
+        micro_auc = self.plot_roc_curves(silent=True)
+        return micro_auc
+                
 def compute_accuracy(sample, threshold, y_true_variable, independent_variable):
     """
     Computes the accuracy for a given threshold.
@@ -1072,3 +1070,100 @@ def compute_sensitivity_specificity(data, y_true_variable, independent_variable,
     sensitivity = tp / (tp + fn)
     specificity = tn / (tn + fp)
     return sensitivity, specificity
+
+
+###----- Functionally Programmed Functions for Evaluation Using Above Classes -----##
+'''
+Hanging imports to facilitate easy transplant of code.
+'''
+import numpy as np
+from calvin_utils.statistical_utils.classification_statistics import ComprehensiveMulticlassROC
+from calvin_utils.statistical_utils.logistic_regression import LogisticRegression
+import os
+from contextlib import redirect_stdout, redirect_stderr
+from tqdm import tqdm
+
+def resample_df(data_df):
+    n_samples = data_df.shape[0]
+    # Shuffle the indices
+    shuffled_indices = np.random.permutation(n_samples)
+    # Reorder the DataFrame based on the shuffled indices but keep the original index
+    shuffled_df = data_df.iloc[shuffled_indices].reset_index(drop=True).set_index(data_df.index)
+    return shuffled_df
+
+def permute_auc_difference(data_df, formula1, formula2, cal_palm, n_iterations=1000):
+    auc_diffs = []
+    for i in tqdm(range(n_iterations)):
+        try:
+            with open(os.devnull, 'w') as fnull, redirect_stdout(fnull), redirect_stderr(fnull):
+                # Define design matrices and outcome matrices for both formulas
+                outcome_matrix, design_matrix1 = cal_palm.define_design_matrix(formula1, data_df)
+                _, design_matrix2 = cal_palm.define_design_matrix(formula2, data_df)
+                
+                # Permute the outcomes
+                if i == 0:
+                    resampled_df = outcome_matrix
+                else:
+                    resampled_df = resample_df(outcome_matrix)
+
+                # Fit the logistic regression model for the first formula
+                logreg1 = LogisticRegression(resampled_df, design_matrix1)
+                results1 = logreg1.run()
+
+                # Fit the logistic regression model for the second formula
+                logreg2 = LogisticRegression(resampled_df, design_matrix2)
+                results2 = logreg2.run()
+
+                # Evaluate the models
+                evaluator1 = ComprehensiveMulticlassROC(fitted_model=results1, observation_df=resampled_df, normalization='true', thresholds=None, out_dir=None)
+                micro_auc1 = evaluator1.get_micro_auc()
+
+                evaluator2 = ComprehensiveMulticlassROC(fitted_model=results2, observation_df=resampled_df, normalization='true', thresholds=None, out_dir=None)
+                micro_auc2 = evaluator2.get_micro_auc()
+
+                # Store the difference in micro-average AUCs
+                if i == 0:
+                    obs_diff = micro_auc1 - micro_auc2
+                else:
+                    auc_diffs.append(micro_auc1 - micro_auc2)
+            
+        except Exception as e:
+            print(e)
+            continue
+    # Calculate p-value based on the distribution of differences
+    auc_diffs = np.array(auc_diffs)
+    p_value = np.mean(auc_diffs >= obs_diff)
+
+    # Calculate confidence intervals for the difference
+    lower_ci = np.percentile(auc_diffs, 2.5)
+    upper_ci = np.percentile(auc_diffs, 97.5)
+    
+    return obs_diff, lower_ci, upper_ci, p_value
+
+def bootstrap_auc(outcome_matrix, design_matrix, n_iterations=1000):
+    auc_scores = []
+    n_samples = outcome_matrix.shape[0]
+    
+    for i in tqdm(range(n_iterations)):
+        # Suppress both stdout and stderr
+        try:
+            with open(os.devnull, 'w') as fnull, redirect_stdout(fnull), redirect_stderr(fnull):
+                # Generate a bootstrap sample
+                resample_idx = np.random.choice(n_samples, size=n_samples, replace=True)
+                outcome_matrix_resampled = outcome_matrix.iloc[resample_idx]
+                design_matrix_resampled = design_matrix.iloc[resample_idx]
+
+                # Fit the logistic regression model
+                logreg = LogisticRegression(outcome_matrix_resampled, design_matrix_resampled)
+                results = logreg.run()
+
+                # Evaluate the model
+                test = ComprehensiveMulticlassROC(fitted_model=results, observation_df=outcome_matrix_resampled, normalization='true', thresholds=None, out_dir=None)
+                micro_auc = test.get_micro_auc()
+                auc_scores.append(micro_auc)
+        except:
+            continue
+    # Calculate confidence intervals
+    lower_ci = np.percentile(auc_scores, 2.5)
+    upper_ci = np.percentile(auc_scores, 97.5)    
+    return np.mean(auc_scores), lower_ci, upper_ci

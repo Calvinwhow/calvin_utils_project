@@ -250,6 +250,16 @@ class CalvinFWEMap():
         """Permute the patient data by randomly assigning patient data (columnar data) to new patients (columns)"""
         return self.variable_dataframe.sample(frac=1, axis=1, random_state=None)
     
+    def get_correlation_map(self, permute=False):
+        '''
+        Params:
+        permute (bool): whether to permute the dependent variable before performing the correlation map. 
+        '''
+        if permute==False:
+            return self.correlation()
+        else:
+            return self.correlation(self.permute_covariates(), debug=False)
+    
     def efficient_rankdata(self, arr, axis=0):
         """
         Efficiently rank data using numpy.
@@ -513,7 +523,7 @@ class CalvinFWEMap():
         self.p_img = self.save_single_nifti(nifti_df=unmasked_p_values, out_dir=self.out_dir, name='p_values', silent=False)
         self.corrected_img = self.save_single_nifti(nifti_df=voxelwise_results_fwe, out_dir=self.out_dir, name='fwe_corrected_results', silent=False)
 
-    def run(self, n_permutations=100, debug=False):
+    def permutation_test_r_map(self, n_permutations=100, debug=False):
         """
         Orchestration method. 
         """

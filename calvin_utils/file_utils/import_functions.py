@@ -220,7 +220,10 @@ class GiiNiiFileImport:
             elif path == 'gii':
                 data = self.import_gifti_to_numpy_array(file_path)
             else:
-                raise ValueError("Invalid Path Type.")
+                try:
+                    data = self.import_nifti_to_numpy_array(file_path)
+                except Exception as e:
+                    raise RuntimeError(e)
             
             # Convert NaNs and Infs if specified
             if self.process_special_values:
