@@ -2,7 +2,7 @@ import pandas as pd
 from typing import Tuple
 from itertools import combinations
 
-def generate_unthresholded_composite(dataframes_dict: dict) -> dict:
+def generate_composite(dataframes_dict: dict, csfgm_only: bool=True, thresholded: bool=True) -> dict:
     """
     Generates composite DataFrames by combining data from multiple DataFrames in the input dictionary.
     For each combination of two or more DataFrames, creates a new DataFrame by summing their values.
@@ -20,51 +20,24 @@ def generate_unthresholded_composite(dataframes_dict: dict) -> dict:
         if k == 'cerebrospinal_fluid':
             dataframes_dict[k] = dataframes_dict[k] * -1
     
-    keys = list(dataframes_dict.keys())
-    for r in range(2, len(keys)+1):  # Create combinations for r-tuples where r ranges from 2 to len(keys)
-        for key_tuple in combinations(keys, r):
-            combined_key = '+'.join(key_tuple)
-            combined_df = pd.DataFrame()
-            
-            # Iterate over each dataframe within the combination
-            for k in key_tuple:
-                if combined_df.empty: 
-                    combined_df = dataframes_dict[k].copy()
-                else:
-                    combined_df += dataframes_dict[k]  # Add the values to the combined DataFrame
+    if csfgm_only and not thresholded:
+        dataframes_dict['csf-plus-gm'] = dataframes_dict['cerebrospinal_fluid'] + dataframes_dict['grey_matter']
+    else:
+        keys = list(dataframes_dict.keys())
+        for r in range(2, len(keys)+1):  # Create combinations for r-tuples where r ranges from 2 to len(keys)
+            for key_tuple in combinations(keys, r):
+                combined_key = '+'.join(key_tuple)
+                combined_df = pd.DataFrame()
+                
+                # Iterate over each dataframe within the combination
+                for k in key_tuple:
+                    if combined_df.empty: 
+                        combined_df = dataframes_dict[k].copy()
+                    else:
+                        combined_df += dataframes_dict[k]  # Add the values to the combined DataFrame
 
-            dataframes_dict[combined_key] = combined_df  # Store the combined DataFrame in the dictionary under the new key
+                dataframes_dict[combined_key] = combined_df  # Store the combined DataFrame in the dictionary under the new key
     return dataframes_dict   
-
-def generate_thresholded_composite(dataframes_dict: dict) -> dict:
-    """
-    Generates composite DataFrames by combining the absolute values of multiple DataFrames in the input dictionary.
-    For each combination of two or more DataFrames, creates a new DataFrame by summing their absolute values.
-
-    Parameters:
-    - dataframes_dict (dict): A dictionary where keys are strings representing the names of DataFrames, 
-                              and values are pandas DataFrames.
-
-    Returns:
-    - dict: The input dictionary updated with additional keys for each combination of DataFrames. 
-            Each new key contains the sum of the absolute values of the combined DataFrames.
-    """
-    keys = list(dataframes_dict.keys())
-    for r in range(2, len(keys)+1):  # Create combinations for r-tuples where r ranges from 2 to len(keys)
-        for key_tuple in combinations(keys, r):
-            combined_key = '+'.join(key_tuple)
-            combined_df = pd.DataFrame()
-
-            for k in key_tuple:
-                abs_df = dataframes_dict[k].abs()  # Take the absolute value of each DataFrame in the combination
-
-                if combined_df.empty:  # If the combined_df is still empty, initialize it with the first absolute DataFrame
-                    combined_df = abs_df.copy()
-                else:
-                    combined_df += abs_df  # Add the absolute values to the combined DataFrame
-
-            dataframes_dict[combined_key] = combined_df  # Store the combined DataFrame in the dictionary under the new key
-    return dataframes_dict
 
 def generate_composite_maps(dataframes_dict: dict, thresholded: bool=True) -> dict:
     """
@@ -82,8 +55,5 @@ def generate_composite_maps(dataframes_dict: dict, thresholded: bool=True) -> di
     - dict: The original dictionary updated with additional keys for each combination of DataFrames. 
             Each new key contains the sum of absolute values of the combined DataFrames.
     """
-    if thresholded:
-       dataframes_dict = generate_thresholded_composite(dataframes_dict)
-    else:
-        dataframes_dict = generate_unthresholded_composite(dataframes_dict)
+    dataframes_dict = generate_composite(dataframes_dict, thresholded=thresholded)
     return dataframes_dict
