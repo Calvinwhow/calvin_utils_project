@@ -2,7 +2,8 @@ import pandas as pd
 import numpy as np
 from sklearn.linear_model import LinearRegression
 from tqdm import tqdm
-from typing import Tuple
+from typing import Tuple, List
+from sklearn.kernel_ridge import KernelRidge
 
 def import_covariates(control_covariates_csv_path: str, patient_covariates_csv_path: str) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
@@ -231,8 +232,111 @@ class CalvinWMap():
         if self.mask:
             patient_w_scores = self.unmask_dataframe(whole_mask, nonzero_mask, patient_df, patient_w_scores)
         return patient_w_scores
+    
+    def optimize_krr_hyperparameters(self, control_df: pd.DataFrame, patient_df: pd.DataFrame,
+                                     alpha_values: List[float]=[0.1, 1.0, 10.0], 
+                                     gamma_values: List[float]=[0.01, 0.1, 1.0],
+                                     scoring='r2', debug: bool=True):
+        """
+        Performs a grid search over alpha and gamma hyperparameters for Kernel Ridge Regression
+        to find the combination that maximizes the R² score on the patient data.
+
+        Parameters:
+        - control_df (pd.DataFrame): Control voxel data.
+        - patient_df (pd.DataFrame): Patient voxel data.
+        - alpha_values (List[float]): List of alpha values to try.
+        - gamma_values (List[float]): List of gamma values to try.
+        - scoring (str): Scoring metric to optimize ('r2' or 'explained_variance').
+        - debug (bool): If True, prints debug information.
+
+        Returns:
+        - best_alpha (float): Alpha value that resulted in the best score.
+        - best_gamma (float): Gamma value that resulted in the best score.
+        - best_score (float): Best R² score achieved on the patient data.
+        """
+        if self.mask:
+            _, _, patient_df, control_df = self.mask_dataframe(control_df, patient_df)
+        
+        # Design matrices
+        X_control = self.sorted_control_covariate_df.T
+        Y_control = control_df.T.values
+
+        X_patient = self.sorted_patient_covariate_df.T
+        Y_patient = patient_df.T.values
+
+        best_score = -np.inf
+        best_alpha = None
+        best_gamma = None
+
+        for alpha in alpha_values:
+            for gamma in gamma_values:
+                krr_model = KernelRidge(kernel='rbf', gamma=gamma, alpha=alpha)
+                krr_model.fit(X_control, Y_control)
+                
+                # Use krr_model.score() to compute R² on patient data
+                score = krr_model.score(X_patient, Y_patient)
+                
+                if debug:
+                    print(f"Alpha: {alpha}, Gamma: {gamma}, Score: {score}")
+
+                if score > best_score:
+                    best_score = score
+                    best_alpha = alpha
+                    best_gamma = gamma
+
+        if debug:
+            print(f"Best Alpha: {best_alpha}, Best Gamma: {best_gamma}, Best Score: {best_score}")
+        return best_alpha, best_gamma, best_score
+
+    def calculate_w_scores_vectorized_krr(self, control_df: pd.DataFrame, patient_df: pd.DataFrame, debug: bool=True) -> pd.DataFrame:
+        """
+        This method uses Kernel Ridge Regression (RBF kernel) from sklearn to fit W-scores.
+        Mathematically, there is no intercept, meaning a separate regression intercept/slope is fit for each sex.
+        The RBF then primarily accounts for the nonlinearity introduced by age upon cortical thickness.
+        The RBF KRR is fit to the control_df, then predicts the patient_df.
+        The residual standard deviation is then manually extracted from the residuals of patient predictions.
+        W-scores are then the residual divided by the residual standard deviation.
+        """
+        # Optional masking for memory conservation
+        if self.mask:
+            whole_mask, nonzero_mask, patient_df, control_df = self.mask_dataframe(control_df, patient_df)
+        
+        # Optimize the KRR given your controls and your experimentals
+        optimal_alpha, optimal_gamma, _ = self.optimize_krr_hyperparameters(control_df, patient_df)
+
+        # Design matrices for CONTROLS
+        X_control = self.sorted_control_covariate_df.T  # Shape: (n_control_samples, n_features)
+        Y_control = control_df.T.values  # Shape: (n_control_samples, n_voxels)
+
+        # Design matrics for EXPERIMENTALS
+        X_patient = self.sorted_patient_covariate_df.T  # Shape: (n_patient_samples, n_features)
+        Y_patient = patient_df.T.values  # Shape: (n_patient_samples, n_voxels)
+
+        # Fit Kernel Ridge Regression on control data
+        krr_model = KernelRidge(kernel='rbf', gamma=optimal_gamma, alpha=optimal_alpha)
+        krr_model.fit(X_control, Y_control)
+
+        # W-Score
+        RESIDUALS_patient = Y_patient - krr_model.predict(X_patient)  # Shape: (n_patient_samples, n_voxels)
+        RESIDUALS_control = Y_control - krr_model.predict(X_control)  # Shape: (n_control_samples, n_voxels)
+        RSD = np.std(RESIDUALS_control, axis=0, ddof=1)  # Shape: (n_voxels,)
+        RSD[RSD == 0] = np.finfo(float).eps  # Avoid division by zero
+
+        # Compute W-scores
+        W_scores = RESIDUALS_patient / RSD[np.newaxis, :]  # Broadcasting to match shapes
+        if self.mask:
+            W_scores_df = self.unmask_dataframe(whole_mask, nonzero_mask, patient_df, W_scores_df)
             
-    def process_atrophy_dataframes(self, dataframes_dict, control_dataframes_dict, vectorize=True):
+        if debug:
+            print(f"X_control shape: {X_control.shape}, Y_control shape: {Y_control.shape}")
+            print(f"RESIDUALS_control shape: {RESIDUALS_control.shape}")
+            print(f"RSD shape: {RSD.shape}")
+            print(f"X_patient shape: {X_patient.shape}, Y_patient shape: {Y_patient.shape}")
+            print(f"RESIDUALS_patient shape: {RESIDUALS_patient.shape}")
+            print(f"W_scores shape: {W_scores.shape}")
+        return W_scores_df
+            
+    def process_atrophy_dataframes(self, dataframes_dict, control_dataframes_dict, vectorize=True, nonlinear=True):
         """
         Processes the provided dataframes to calculate z-scores and determine significant atrophy.
 
@@ -241,6 +345,8 @@ class CalvinWMap():
         - control_dataframes_dict (dict): Dictionary containing control dataframes.
         - vector (bool): If set to false, will consider the statistical distribution of each voxel independently.
             If set to true, will 
+        - nonlinear (bool): if set to True, will use an RBF kernel ridge regression to account for nonlinear atrophy with age.
+            If false, will use a normal multivariate linear regression.
 
         Returns:
         - tuple: A tuple containing two dictionaries - atrophy_dataframes_dict and significant_atrophy_dataframes_dict.
@@ -255,7 +361,9 @@ class CalvinWMap():
             self.sorted_patient_voxel_df, self.sorted_patient_covariate_df = self.sort_dataframes(dataframes_dict[k], self.patient_covariates_df)
             
             # Submit
-            if vectorize:
+            if vectorize & nonlinear:
+                atrophy_dataframes_dict[k] = self.calculate_w_scores_vectorized_krr(control_df=self.sorted_control_voxel_df, patient_df=self.sorted_patient_voxel_df)
+            elif vectorize and not nonlinear:
                 atrophy_dataframes_dict[k] = self.calculate_w_scores_vectorized(control_df=self.sorted_control_voxel_df, patient_df=self.sorted_patient_voxel_df)
             else:
                 atrophy_dataframes_dict[k] = self.calculate_w_scores(control_df=self.sorted_control_voxel_df, patient_df=self.sorted_patient_voxel_df)
