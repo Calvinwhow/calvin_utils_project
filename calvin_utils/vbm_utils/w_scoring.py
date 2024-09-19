@@ -288,7 +288,7 @@ class CalvinWMap():
             print(f"Best Alpha: {best_alpha}, Best Gamma: {best_gamma}, Best Score: {best_score}")
         return best_alpha, best_gamma, best_score
 
-    def calculate_w_scores_vectorized_krr(self, control_df: pd.DataFrame, patient_df: pd.DataFrame, debug: bool=True) -> pd.DataFrame:
+    def calculate_w_scores_vectorized_krr(self, control_df: pd.DataFrame, patient_df: pd.DataFrame, debug: bool=False) -> pd.DataFrame:
         """
         This method uses Kernel Ridge Regression (RBF kernel) from sklearn to fit W-scores.
         Mathematically, there is no intercept, meaning a separate regression intercept/slope is fit for each sex.
