@@ -1,10 +1,12 @@
 import pandas as pd
 import numpy as np
-from sklearn.linear_model import LinearRegression
 from tqdm import tqdm
 from typing import Tuple, List
+from sklearn.linear_model import LinearRegression
 from sklearn.kernel_ridge import KernelRidge
 from sklearn.model_selection import GridSearchCV
+from sklearn.preprocessing import StandardScaler
+
 
 def import_covariates(control_covariates_csv_path: str, patient_covariates_csv_path: str) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
@@ -276,20 +278,20 @@ class CalvinWMap():
         The residual standard deviation is then manually extracted from the residuals of patient predictions.
         W-scores are then the residual divided by the residual standard deviation.
         """
+        print("Using Radial Basis Function Kernel Ridge Regression. All input data should already be standardized.")
         # Optional masking for memory conservation
         if self.mask:
             _, _, patient_df, control_df = self.mask_dataframe(control_df, patient_df)
-        
-        # Optimize the KRR given your controls and your experimentals
-        optimal_alpha, optimal_gamma, _ = self.optimize_krr_hyperparameters(control_df, patient_df)
 
         # Design matrices for CONTROLS
         X_control = self.sorted_control_covariate_df.T  # Shape: (n_control_samples, n_features)
         Y_control = control_df.T.values  # Shape: (n_control_samples, n_voxels)
-
         # Design matrics for EXPERIMENTALS
         X_patient = self.sorted_patient_covariate_df.T  # Shape: (n_patient_samples, n_features)
         Y_patient = patient_df.T.values  # Shape: (n_patient_samples, n_voxels)
+
+        # Optimize the KRR given your controls and your experimentals
+        optimal_alpha, optimal_gamma, _ = self.optimize_krr_hyperparameters(control_df)
 
         # Fit Kernel Ridge Regression on control data
         krr_model = KernelRidge(kernel='rbf', gamma=optimal_gamma, alpha=optimal_alpha)
