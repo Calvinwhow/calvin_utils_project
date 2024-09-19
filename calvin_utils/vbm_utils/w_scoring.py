@@ -4,6 +4,7 @@ from sklearn.linear_model import LinearRegression
 from tqdm import tqdm
 from typing import Tuple, List
 from sklearn.kernel_ridge import KernelRidge
+from sklearn.model_selection import GridSearchCV
 
 def import_covariates(control_covariates_csv_path: str, patient_covariates_csv_path: str) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
@@ -233,59 +234,37 @@ class CalvinWMap():
             patient_w_scores = self.unmask_dataframe(whole_mask, nonzero_mask, patient_df, patient_w_scores)
         return patient_w_scores
     
-    def optimize_krr_hyperparameters(self, control_df: pd.DataFrame, patient_df: pd.DataFrame,
-                                     alpha_values: List[float]=[0.1, 1.0, 10.0], 
-                                     gamma_values: List[float]=[0.01, 0.1, 1.0],
-                                     scoring='r2', debug: bool=True):
+    def optimize_krr_hyperparameters(self, control_df: pd.DataFrame,
+                                 alpha_values: List[float]=[0.1, 1.0, 10.0],
+                                 gamma_values: List[float]=[0.01, 0.1, 1.0],
+                                 cv=5, scoring='neg_mean_squared_error', debug: bool=True):
         """
-        Performs a grid search over alpha and gamma hyperparameters for Kernel Ridge Regression
-        to find the combination that maximizes the R² score on the patient data.
-
-        Parameters:
-        - control_df (pd.DataFrame): Control voxel data.
-        - patient_df (pd.DataFrame): Patient voxel data.
-        - alpha_values (List[float]): List of alpha values to try.
-        - gamma_values (List[float]): List of gamma values to try.
-        - scoring (str): Scoring metric to optimize ('r2' or 'explained_variance').
-        - debug (bool): If True, prints debug information.
-
-        Returns:
-        - best_alpha (float): Alpha value that resulted in the best score.
-        - best_gamma (float): Gamma value that resulted in the best score.
-        - best_score (float): Best R² score achieved on the patient data.
+        Optimizes KRR hyperparameters using cross-validation on control data.
         """
-        if self.mask:
-            _, _, patient_df, control_df = self.mask_dataframe(control_df, patient_df)
-        
-        # Design matrices
-        X_control = self.sorted_control_covariate_df.T
-        Y_control = control_df.T.values
+        # Prepare data
+        X_control = self.sorted_control_covariate_df.T  # Shape: (n_control_samples, n_features)
+        Y_control = control_df.T.values  # Shape: (n_control_samples, n_voxels)
 
-        X_patient = self.sorted_patient_covariate_df.T
-        Y_patient = patient_df.T.values
+        # Initialize KRR model
+        krr_model = KernelRidge(kernel='rbf')
 
-        best_score = -np.inf
-        best_alpha = None
-        best_gamma = None
+        # Define parameter grid
+        param_grid = {'alpha': alpha_values, 'gamma': gamma_values}
 
-        for alpha in alpha_values:
-            for gamma in gamma_values:
-                krr_model = KernelRidge(kernel='rbf', gamma=gamma, alpha=alpha)
-                krr_model.fit(X_control, Y_control)
-                
-                # Use krr_model.score() to compute R² on patient data
-                score = krr_model.score(X_patient, Y_patient)
-                
-                if debug:
-                    print(f"Alpha: {alpha}, Gamma: {gamma}, Score: {score}")
+        # Set up GridSearchCV
+        grid_search = GridSearchCV(krr_model, param_grid, cv=cv, scoring=scoring, n_jobs=-1)
 
-                if score > best_score:
-                    best_score = score
-                    best_alpha = alpha
-                    best_gamma = gamma
+        # Fit grid search
+        grid_search.fit(X_control, Y_control)
+
+        # Extract best hyperparameters
+        best_alpha = grid_search.best_params_['alpha']
+        best_gamma = grid_search.best_params_['gamma']
+        best_score = grid_search.best_score_
 
         if debug:
-            print(f"Best Alpha: {best_alpha}, Best Gamma: {best_gamma}, Best Score: {best_score}")
+            print(f"Best Alpha: {best_alpha}, Best Gamma: {best_gamma}, Best CV Score: {best_score}")
+
         return best_alpha, best_gamma, best_score
 
     def calculate_w_scores_vectorized_krr(self, control_df: pd.DataFrame, patient_df: pd.DataFrame, debug: bool=False) -> pd.DataFrame:
@@ -299,7 +278,7 @@ class CalvinWMap():
         """
         # Optional masking for memory conservation
         if self.mask:
-            whole_mask, nonzero_mask, patient_df, control_df = self.mask_dataframe(control_df, patient_df)
+            _, _, patient_df, control_df = self.mask_dataframe(control_df, patient_df)
         
         # Optimize the KRR given your controls and your experimentals
         optimal_alpha, optimal_gamma, _ = self.optimize_krr_hyperparameters(control_df, patient_df)
@@ -324,8 +303,9 @@ class CalvinWMap():
 
         # Compute W-scores
         W_scores = RESIDUALS_patient / RSD[np.newaxis, :]  # Broadcasting to match shapes
+        W_scores_df = pd.DataFrame(W_scores.T, index=control_df.index, columns=patient_df.columns)
         if self.mask:
-            W_scores_df = self.unmask_dataframe(whole_mask, nonzero_mask, patient_df, W_scores_df)
+            W_scores_df = self.unmask_dataframe(W_scores.T, index=control_df.index, columns=patient_df.columns)            
             
         if debug:
             print(f"X_control shape: {X_control.shape}, Y_control shape: {Y_control.shape}")
@@ -374,7 +354,7 @@ class CalvinWMap():
             else:
                 significant_atrophy_dataframes_dict[k] = atrophy_dataframes_dict[k].where(atrophy_dataframes_dict[k] < -2, 0)
             print('Dataframe: ', k)
-            display(dataframes_dict[k])
+            print(dataframes_dict[k])
             print('------------- \n')
         
         return atrophy_dataframes_dict, significant_atrophy_dataframes_dict
