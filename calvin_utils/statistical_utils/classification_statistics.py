@@ -349,6 +349,11 @@ class MulticlassClassificationEvaluation:
         self.thresholds = thresholds
         self.assign_labels = assign_labels
     
+    def relate_index_to_class(self):
+        print("Note: The rasterized probability plot show the probability of the correect class by default.")
+        for i, col in enumerate(self.outcome_matrix):
+            print(f"{i}: {col}")
+    
     def resolve_disagreements(self, probabilities, predictions, classes_above_threshold, relative_threshold=True, priority_rules=None, debug=False):
         """
         Resolves disagreements when multiple classes exceed their threshold.
@@ -384,63 +389,36 @@ class MulticlassClassificationEvaluation:
                 print(f"Relative scores considered. Winner: Class {winner_index} with scores: {relative_scores}")
 
         return winner_index
-
     
-    def threshold_predictions(self, probabilities, debug=False, advanced_thresholding=False):
+    def apply_manual_thresholds(self, debug=True):
         """
-        Determines the predicted class for each instance in the dataset based on the probabilities and defined thresholds.
-
-        This method iterates through each instance's probabilities and assigns a class based on whether it exceeds the 
-        predefined thresholds. In cases where multiple classes exceed their respective thresholds, the method resolves 
-        disagreements either by selecting the class with the highest probability or by using an advanced thresholding 
-        technique which might involve priority rules and relative thresholds.
-
-        Args:
-            probabilities (numpy.ndarray): A 2D array where each row represents an instance and each column 
-                represents the probability of that instance belonging to a particular class.
-            debug (bool): If set to True, the method will print additional information about the prediction 
-                process, especially in cases of disagreements. Default is False.
-            advanced_thresholding (bool): Determines whether to use advanced techniques such as priority rules 
-                and relative threshold comparisons to resolve cases where multiple classes exceed their thresholds 
-                for a single instance. Default is True.
-
-        Returns:
-            numpy.ndarray: An array of predicted class indices for each instance in the dataset.
-
-        Note:
-            - The `self.thresholds` attribute should be set prior to calling this method, containing the threshold 
-                values for each class.
-            - In cases where `advanced_thresholding` is True and multiple classes exceed their thresholds, 
-                `resolve_disagreements` method is called to determine the winning class based on additional criteria.
-            - If no class exceeds its threshold for an instance, the class with the maximum probability is selected.
-        """
-        # Create an array to hold the predictions
-        predictions = np.zeros(probabilities.shape[0], dtype=int)
+        Applies manual thresholds to the predictions based on argmax and predefined rules.
+        Returns an array of the same shape as raw_predictions.argmax(1).
         
-        for i in range(probabilities.shape[0]):
-            # For each instance, get the classes that exceed the threshold
-            classes_above_threshold = np.where(probabilities[i] >= np.array(list(self.thresholds.values())))[0]
-            if len(classes_above_threshold) == 1:
-                # If only one class is above the threshold, assign it
-                predictions[i] = classes_above_threshold[0]
-            elif len(classes_above_threshold) > 1:
-                if advanced_thresholding:
-                    predictions[i] = self.resolve_disagreements(probabilities[i], predictions[i], classes_above_threshold, debug)
-                else:
-                    # If no rule applies, pick the class with the highest probability
-                    predictions[i] = classes_above_threshold[np.argmax(probabilities[i, classes_above_threshold])]
-                if debug:
-                    print(f"Disagreement in row {i}, choices: {classes_above_threshold}")
-                    print("probabilities: ", probabilities[i, classes_above_threshold])
-            else:
-                # If no classes exceed their threshold, choose the class with the maximum probability
-                predictions[i] = np.argmax(probabilities[i])
-                if debug:
-                    print("Could not choose a classification in row {i}")
-                    print("Associated probabilities: ", probabilities[i,:])
-                    print("Actual data: ", self.outcome_matrix.iloc[i,:])
-        return predictions
-
+        The self.thresholds structure should map from class indices (as identified by argmax) to a function
+        that adjusts the predicted class based on some condition.
+        
+        Example of how to format self.thresholds to generate rules: 
+        Let's say we have 3 classes and we want to modify class_1 based on probabilities
+        The index identified by argmax corresponds to the first key (0,1,2), which correspond to the class. 
+        thresholds = {
+            0: lambda probs: 0 if probs[0] > 0.5 else (1 if probs[0] > 0.25 else 2),  # Adjust class_0 predictions
+            1: lambda probs: None,  # No threshold adjustment for class_1
+            2: lambda probs: None   # No threshold adjustment for class_2
+        }
+        """        
+        classifications = self.raw_predictions.argmax(1)
+        final_predictions = np.zeros(classifications.shape[0], dtype=int)
+        
+        for i, choice in enumerate(classifications):
+            if choice in self.thresholds.keys():
+                function = self.thresholds[choice]
+                probabilities = self.raw_predictions[i]
+                new_choice = function(probabilities)
+                final_predictions[i] = new_choice
+                if debug: print(f"Choice: {choice}, Probabilities: {probabilities}, New Choice: {new_choice}")
+        return final_predictions 
+    
     def get_predictions(self, debug=False):
         """
         Takes a model or a DF of probabilities (or dummy-coded predictions) and returns the prediction. 
@@ -455,7 +433,7 @@ class MulticlassClassificationEvaluation:
             self.predictions = self.raw_predictions.argmax(1)
         else:
             print("Applying prescribed thresholds for prediction.")
-            self.predictions = self.threshold_predictions(self.raw_predictions)
+            self.predictions = self.apply_manual_thresholds()
         self.predictions_df = pd.DataFrame(self.raw_predictions, columns = self.outcome_matrix.columns)
     
     def get_observations(self):
@@ -475,6 +453,7 @@ class MulticlassClassificationEvaluation:
         Each row in a subplot corresponds to a class. Incorrect classifications are color-coded by the correct class
         and placed in the row of the predicted class.
         If probability_of_correct_class is True, plot the probability of the true class for incorrect predictions.
+            If false, will plot the probability of the selected class. 
         """
         n_classes = self.outcome_matrix.shape[1]
         colors = sns.color_palette("tab10") if n_classes <= 10 else sns.color_palette("tab20", n_classes)
