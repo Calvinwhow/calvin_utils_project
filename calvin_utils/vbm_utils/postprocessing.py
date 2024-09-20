@@ -63,7 +63,7 @@ def sort_dataframes_by_index(damage_df_dict):
             
             # Display the results
             print('Dataframe: ', k)
-            display(sorted_df)
+            print(sorted_df)
             print('------------- \n')
             
         except ValueError:
@@ -111,7 +111,7 @@ def calculate_damage_scores(thresholded_atrophy_df_dict, region_of_interest_df, 
                 damage_df_dict[k].loc[subject, 'num_atrophied_voxels_'+matrix] = num_voxels
                 
         print('Dataframe: ', k)
-        display(damage_df_dict[k])
+        print(damage_df_dict[k])
         print('------------- \n')
     
     return damage_df_dict

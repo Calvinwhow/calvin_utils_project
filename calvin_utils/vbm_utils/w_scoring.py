@@ -5,8 +5,40 @@ from typing import Tuple, List
 from sklearn.linear_model import LinearRegression
 from sklearn.kernel_ridge import KernelRidge
 from sklearn.model_selection import GridSearchCV
-from sklearn.preprocessing import StandardScaler
+import joblib
+import multiprocessing
 
+def parallel_krr_predict(X_patient: np.ndarray, krr_model, n_jobs: int = -1, debug=True) -> np.ndarray:
+    """
+    Parallelizes the prediction process of a fitted Kernel Ridge Regression (KRR) model.
+
+    Args:
+        X_patient (np.ndarray): Patient covariate matrix of shape (n_patient_samples, n_features).
+        krr_model: A pre-fitted scikit-learn KernelRidge model.
+        n_jobs (int, optional): Number of parallel jobs. Defaults to -1 (uses all available cores).
+
+    Returns:
+        np.ndarray: Predicted voxel intensities for patients of shape (n_patient_samples, n_voxels).
+    """
+    if n_jobs == -1 & X_patient.shape[0]>n_jobs:
+        n_jobs = multiprocessing.cpu_count()
+    else:
+        n_jobs = 1
+    X_chunks = np.array_split(X_patient, n_jobs)
+        
+    def predict_chunk(chunk):
+        """Helper function to predict a chunk of patient data."""
+        return krr_model.predict(chunk)
+
+    # Perform parallel predictions
+    predictions = joblib.Parallel(n_jobs=n_jobs)(
+        joblib.delayed(predict_chunk)(chunk) for chunk in tqdm(X_chunks, desc='Predicting chunks')
+    )
+
+    # Concatenate the predictions from all chunks
+    Y_patient_pred = np.vstack(predictions)
+
+    return Y_patient_pred
 
 def import_covariates(control_covariates_csv_path: str, patient_covariates_csv_path: str) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
@@ -64,25 +96,19 @@ class CalvinWMap():
 
     def sort_dataframes(self, voxel_df: pd.DataFrame, covariate_df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
         """
-        Will sort the rows of the voxelwise DF and the covariate DF to make sure they are identically organized.
-        Then will check that the columns are equivalent. 
+        Ensures the voxelwise DF and covariate DF have matching column names as strings
+        and returns dataframes with only shared columns.
         """
-        # Force Columns to Match
-        voxel_cols = set(voxel_df.columns.astype(str).sort_values().values)
-        covariate_cols = set(covariate_df.columns.astype(str).sort_values().values)
-        shared_columns = list(voxel_cols.intersection(covariate_cols))
-        # This will occur when columns have strange naming, such as subject 1 being 0001 verus 1. 
-        if len(shared_columns) == 0:
-            voxel_cols = voxel_df.columns.astype(int).astype(str).sort_values().values
-            covariate_cols = covariate_df.columns.astype(int).astype(str).sort_values().values
-            
-            voxel_df.columns = voxel_cols
-            covariate_df.columns = covariate_cols
-            
-            shared_columns = list(set(voxel_cols).intersection(set(covariate_cols)))
-            
-        return voxel_df.loc[:, shared_columns], covariate_df.loc[:, shared_columns]
-    
+        # Align both dataframes to the shared columns
+        voxel_df.columns = voxel_df.columns.astype(str)
+        covariate_df.columns = covariate_df.columns.astype(str)
+        shared_columns = list(set(voxel_df.columns).intersection(set(covariate_df.columns)))
+
+        # Check if there are no shared columns
+        if not shared_columns:
+            raise ValueError("No shared columns found between the dataframes.")
+        return voxel_df[shared_columns], covariate_df[shared_columns]
+
     def mask_dataframe(self, control_df: pd.DataFrame, patient_df: pd.DataFrame, threshold: float=0.2):
         """
         Simple masking function.
@@ -159,14 +185,18 @@ class CalvinWMap():
         # Predict on experimental group and calculate errors
         PREDICTION = control_model.predict(X_patient)
         RESIDUALS = Y_patient - PREDICTION
-        RSS = np.sum(RESIDUALS**2, axis=0)
-        DF = Y_patient.shape[0] - X_patient.shape[1] - int(self.use_intercept)
-        RSD = np.sqrt(RSS / DF)
+        
+        C_RESIDUALS = Y_control - control_model.predict(X_control)
+        C_RSS = np.sum(C_RESIDUALS**2, axis=0)
+        C_DF = Y_control.shape[0] - X_control.shape[1] - int(self.use_intercept)
+        if C_DF < 0:
+            raise ValueError("Degrees of freedom have fallen below 0. You need more control samples.")
+        C_RSD = np.sqrt(C_RSS / C_DF)
 
         # Compute W-scores for patient data
-        w_scores = RESIDUALS / RSD
+        w_scores = RESIDUALS / C_RSD
         if debug:
-            print(X_patient.shape, Y_patient.shape, PREDICTION.shape, RESIDUALS.shape, RSS.shape, RSD.shape, w_scores.shape)
+            print(X_patient.shape, Y_patient.shape, PREDICTION.shape, RESIDUALS.shape, C_RSS.shape, C_RSD.shape, w_scores.shape)
 
         # Reshape W-scores to DataFrame format
         w_scores_df = pd.DataFrame(w_scores.T, index=control_df.index, columns=patient_df.columns)
@@ -174,7 +204,6 @@ class CalvinWMap():
             w_scores_df = self.unmask_dataframe(whole_mask, nonzero_mask, patient_df, w_scores_df)
         
         return w_scores_df
-
 
     def calculate_w_scores(self, control_df: pd.DataFrame, patient_df: pd.DataFrame) -> pd.DataFrame:
         """
@@ -237,9 +266,9 @@ class CalvinWMap():
         return patient_w_scores
     
     def optimize_krr_hyperparameters(self, control_df: pd.DataFrame,
-                                 alpha_values: List[float]=[0.1, 1.0, 10.0],
-                                 gamma_values: List[float]=[0.01, 0.1, 1.0],
-                                 cv=5, scoring='neg_mean_squared_error', debug: bool=True):
+                                 alpha_values: List[float]=[0.001, 0.01, 0.1], # Want to prevent loss of coefficient use.
+                                 gamma_values: List[float]=[0.01, 0.1, 1.0], # Want to allow full Gamma to avoid overfit.
+                                 cv=5, scoring='neg_root_mean_squared_error'):
         """
         Optimizes KRR hyperparameters using cross-validation on control data.
         """
@@ -247,26 +276,16 @@ class CalvinWMap():
         X_control = self.sorted_control_covariate_df.T  # Shape: (n_control_samples, n_features)
         Y_control = control_df.T.values  # Shape: (n_control_samples, n_voxels)
 
-        # Initialize KRR model
+        # Initialize KRR model and grid search.
         krr_model = KernelRidge(kernel='rbf')
-
-        # Define parameter grid
         param_grid = {'alpha': alpha_values, 'gamma': gamma_values}
-
-        # Set up GridSearchCV
         grid_search = GridSearchCV(krr_model, param_grid, cv=cv, scoring=scoring, n_jobs=-1)
-
-        # Fit grid search
         grid_search.fit(X_control, Y_control)
 
         # Extract best hyperparameters
         best_alpha = grid_search.best_params_['alpha']
         best_gamma = grid_search.best_params_['gamma']
         best_score = grid_search.best_score_
-
-        if debug:
-            print(f"Best Alpha: {best_alpha}, Best Gamma: {best_gamma}, Best CV Score: {best_score}")
-
         return best_alpha, best_gamma, best_score
 
     def calculate_w_scores_vectorized_krr(self, control_df: pd.DataFrame, patient_df: pd.DataFrame, debug: bool=False) -> pd.DataFrame:
@@ -281,7 +300,7 @@ class CalvinWMap():
         print("Using Radial Basis Function Kernel Ridge Regression. All input data should already be standardized.")
         # Optional masking for memory conservation
         if self.mask:
-            _, _, patient_df, control_df = self.mask_dataframe(control_df, patient_df)
+            whole_mask, nonzero_mask, patient_df, control_df = self.mask_dataframe(control_df, patient_df)
 
         # Design matrices for CONTROLS
         X_control = self.sorted_control_covariate_df.T  # Shape: (n_control_samples, n_features)
@@ -291,24 +310,31 @@ class CalvinWMap():
         Y_patient = patient_df.T.values  # Shape: (n_patient_samples, n_voxels)
 
         # Optimize the KRR given your controls and your experimentals
-        optimal_alpha, optimal_gamma, _ = self.optimize_krr_hyperparameters(control_df)
+        optimal_alpha, optimal_gamma, best_score = self.optimize_krr_hyperparameters(control_df)
+        print(f"Step 1/5: RBF optimized with cross-validated nMSE of: {best_score}")
 
         # Fit Kernel Ridge Regression on control data
         krr_model = KernelRidge(kernel='rbf', gamma=optimal_gamma, alpha=optimal_alpha)
         krr_model.fit(X_control, Y_control)
+        print("Step 2/5: KRR Fitted")
 
         # W-Score
-        RESIDUALS_patient = Y_patient - krr_model.predict(X_patient)  # Shape: (n_patient_samples, n_voxels)
-        RESIDUALS_control = Y_control - krr_model.predict(X_control)  # Shape: (n_control_samples, n_voxels)
-        RSD = np.std(RESIDUALS_control, axis=0, ddof=1)  # Shape: (n_voxels,)
+        Y_HAT_patients = parallel_krr_predict(X_patient, krr_model)
+        RESIDUALS_patient = Y_patient - Y_HAT_patients  # Shape: (n_patient_samples, n_voxels)
+        print("Step 3/5: Patient residuals estimated")
+        Y_HAT_controls = parallel_krr_predict(X_control, krr_model)
+        RESIDUALS_control = Y_control - Y_HAT_controls  # Shape: (n_control_samples, n_voxels)
+        print("Step 4/5: Control residuals estimated")
+        NUM = np.sum(np.square(RESIDUALS_control), axis=0) # Sum of the squared residuals
+        DEN = RESIDUALS_control.shape[0] - 3 # Sample size minues degrees of freedom (params in model)
+        RSD = np.sqrt(NUM/DEN)  # Shape: (n_voxels,)
         RSD[RSD == 0] = np.finfo(float).eps  # Avoid division by zero
-
-        # Compute W-scores
         W_scores = RESIDUALS_patient / RSD[np.newaxis, :]  # Broadcasting to match shapes
-        W_scores_df = pd.DataFrame(W_scores.T, index=control_df.index, columns=patient_df.columns)
+        
+        W_scores_df = pd.DataFrame(W_scores.T, index=patient_df.index, columns=patient_df.columns)
         if self.mask:
-            W_scores_df = self.unmask_dataframe(W_scores.T, index=control_df.index, columns=patient_df.columns)            
-            
+            W_scores_df = self.unmask_dataframe(whole_mask, nonzero_mask, patient_df, W_scores_df)
+        print("Step 5/5: W-scores calculated")
         if debug:
             print(f"X_control shape: {X_control.shape}, Y_control shape: {Y_control.shape}")
             print(f"RESIDUALS_control shape: {RESIDUALS_control.shape}")
@@ -318,7 +344,7 @@ class CalvinWMap():
             print(f"W_scores shape: {W_scores.shape}")
         return W_scores_df
             
-    def process_atrophy_dataframes(self, dataframes_dict, control_dataframes_dict, vectorize=True, nonlinear=True):
+    def process_atrophy_dataframes(self, dataframes_dict, control_dataframes_dict, vectorize=True, nonlinear=False):
         """
         Processes the provided dataframes to calculate z-scores and determine significant atrophy.
 
@@ -361,9 +387,21 @@ class CalvinWMap():
         
         return atrophy_dataframes_dict, significant_atrophy_dataframes_dict
     
-    def run(self):
+    def sign_flip(self, atrophy_dict):
+        for k,v in atrophy_dict.items():
+            if k == 'cerebrospinal_fluid': continue
+            else: atrophy_dict[k] *= -1
+        return atrophy_dict
+        
+    
+    def run(self, set_atrophy_positive=False):
         """
         Orchestration method. 
+        params:
+            set_atrophy_positive (bool): whether to multiple each dict that is not CSF by -1 
         """
         atrophy_dataframes_dict, significant_atrophy_dataframes_dict = self.process_atrophy_dataframes(self.dataframes_dict, self.control_dataframes_dict)
+        if set_atrophy_positive:
+            atrophy_dataframes_dict = self.sign_flip(atrophy_dataframes_dict)
+            significant_atrophy_dataframes_dict = self.sign_flip(significant_atrophy_dataframes_dict)
         return atrophy_dataframes_dict, significant_atrophy_dataframes_dict

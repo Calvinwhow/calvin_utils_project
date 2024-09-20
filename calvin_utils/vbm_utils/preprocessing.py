@@ -24,14 +24,6 @@ def extract_and_rename_subject_id(dataframe, split_command_dict):
 
     Returns:
     - pd.DataFrame: Dataframe with renamed columns.
-
-    Example:
-    >>> data = {'subject_001': [1, 2, 3], 'patient_002': [4, 5, 6], 'control_003': [7, 8, 9]}
-    >>> df = pd.DataFrame(data)
-    >>> split_commands = {'_': 1}
-    >>> new_df = extract_and_rename_subject_id(df, split_commands)
-    >>> print(new_df.columns)
-    Index(['001', '002', '003'], dtype='object')
     """
 
     raw_names = dataframe.columns
@@ -71,7 +63,7 @@ def rename_dataframe_subjects(dataframes_dict, preceding_id, proceeding_id):
     for k, v in dataframes_dict.items():
         dataframes_dict[k] = extract_and_rename_subject_id(dataframe=dataframes_dict[k], split_command_dict=split_command_dict)
         print('Dataframe: ', k)
-        display(dataframes_dict[k])
+        print(dataframes_dict[k])
         print('------------- \n')
 
     return dataframes_dict

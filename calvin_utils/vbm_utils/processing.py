@@ -85,10 +85,6 @@ def save_nifti_to_bids(dataframes_dict, bids_base_dir, analysis='tissue_segment_
     This function assumes a predefined BIDS directory structure and saves the NIFTI 
     images accordingly. The function currently has the view_and_save_nifti call commented out 
     for safety. Uncomment this call if you wish to actually save the NIFTI images.
-    
-    Example:
-    >>> dfs = { ... }  # some dictionary with dataframes
-    >>> save_nifti_to_bids(dfs, '/path/to/base/dir')
     """
     
     for k in tqdm(dataframes_dict.keys()):
