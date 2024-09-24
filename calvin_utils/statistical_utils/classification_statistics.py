@@ -1103,6 +1103,7 @@ def permute_auc_difference(data_df, formula1, formula2, cal_palm, n_iterations=1
                 # Store the difference in micro-average AUCs
                 if i == 0:
                     obs_diff = micro_auc1 - micro_auc2
+                    print(f"F1: {micro_auc1} | F2: {micro_auc2}")
                 else:
                     auc_diffs.append(micro_auc1 - micro_auc2)
             

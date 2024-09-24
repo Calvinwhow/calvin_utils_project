@@ -149,7 +149,7 @@ def replace_unacceptable_characters(data_df):
     Returns:
     - DataFrame with modified column names.
     """
-    unacceptable_chars = ['-', '#', '%', '(', ')', ' ', ',', ';', '!', '?', '*', '/', ':', '[', ']', '{', '}', '|', '<', '>', '+', '=', '@', '&', '^', '`', '~']
+    unacceptable_chars = ['-', '#', '%', '(', ')', ' ', ',', ';', '!', '?', '*', '/', ':', '[', ']', '{', '}', '|', '<', '>', '+', '=', '@', '&', '^', '`', '~', '.']
     for char in unacceptable_chars:
         data_df.columns = [col.replace(char, '_') for col in data_df.columns]
     return data_df

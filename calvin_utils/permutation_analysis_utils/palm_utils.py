@@ -14,24 +14,19 @@ import getpass
 from termcolor import cprint
 import nibabel as nib
 from nilearn import image
-from nimlab import datasets as ds
-from nimlab import configuration as config
 import pandas as pd
 from IPython.core.getipython import get_ipython
 try:
     from pathlib import Path
 except:
     from pathlib2 import Path
-
 import pandas as pd
 import os
 import subprocess
 import numpy as np
 import patsy
 from calvin_utils.file_utils.dataframe_utilities import preprocess_colnames_for_regression
-
 from nilearn import image
-from nimlab import datasets as nimds
 import nibabel as nib
 import numpy as np
 

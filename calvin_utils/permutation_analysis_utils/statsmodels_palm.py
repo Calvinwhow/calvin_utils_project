@@ -20,7 +20,6 @@ class CalvinStatsmodelsPalm(CalvinPalm):
         Reads data using the parent class method and displays the DataFrame.
         """
         data_df = super().read_data()
-        display(data_df)
         return data_df
     
     def define_design_matrix(self, formula, data_df, voxelwise_variable=None):
