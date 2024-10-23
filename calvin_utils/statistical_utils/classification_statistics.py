@@ -390,7 +390,7 @@ class MulticlassClassificationEvaluation:
 
         return winner_index
     
-    def apply_manual_thresholds(self, debug=True):
+    def apply_manual_thresholds(self, debug=False):
         """
         Applies manual thresholds to the predictions based on argmax and predefined rules.
         Returns an array of the same shape as raw_predictions.argmax(1).
@@ -407,9 +407,12 @@ class MulticlassClassificationEvaluation:
             2: lambda probs: None   # No threshold adjustment for class_2
         }
         """        
-        classifications = self.raw_predictions.argmax(1)
+        if len(self.raw_predictions.shape)==1:                          # binomial case
+            classifications = (self.raw_predictions > 0.5).astype(int).flatten()
+        else:                                                           # multinomial case
+            classifications = self.raw_predictions.argmax(1)
         final_predictions = np.zeros(classifications.shape[0], dtype=int)
-        
+
         for i, choice in enumerate(classifications):
             if choice in self.thresholds.keys():
                 function = self.thresholds[choice]
@@ -430,18 +433,24 @@ class MulticlassClassificationEvaluation:
             
         if self.thresholds is None:
             print("Taking maximum probability as prediction.")
-            self.predictions = self.raw_predictions.argmax(1)
+            if len(self.raw_predictions.shape) == 1:                     # Account for binomial vs multinomial prediction structure
+                self.predictions = (self.raw_predictions > 0.5).astype(int).flatten() # Binarize by 0.50, the default logistic decision curve threshold
+            else:                                                           # Run the multinomial approach
+                self.predictions = self.raw_predictions.argmax(1)           # Take max estimate
         else:
             print("Applying prescribed thresholds for prediction.")
             self.predictions = self.apply_manual_thresholds()
-        self.predictions_df = pd.DataFrame(self.raw_predictions, columns = self.outcome_matrix.columns)
+        self.predictions_df = pd.DataFrame(self.raw_predictions, columns=self.outcome_matrix.columns)
     
     def get_observations(self):
         """
         Takes a DF of dummy-coded observations and 
         """
         self.raw_observations = self.outcome_matrix.to_numpy()
-        self.observations = self.raw_observations.argmax(1) 
+        if len(self.raw_predictions.shape) == 1:                             # Binomial Observations Case
+            self.observations = self.raw_observations.astype(int).flatten().tolist() 
+        else:                                                               # Multinomial Observations Case
+            self.observations = self.raw_observations.argmax(1) 
         self.observations_df = pd.DataFrame(self.raw_observations, columns = self.outcome_matrix.columns)
         for col in self.observations_df.columns:
             print(f"There are {np.sum(self.observations_df[col])} observations for {col}")
@@ -463,13 +472,19 @@ class MulticlassClassificationEvaluation:
         # Loop through each prediction
         for i, (true, pred, probs) in enumerate(zip(self.observations, self.predictions, self.raw_predictions)):
             # Plotting the correct classifications
-            if true == pred:
-                axs[0].eventplot([probs[pred]], lineoffsets=pred, linelengths=0.5, colors=[colors[pred]])
+            if true == pred:    
+                if len(self.raw_predictions.shape) == 1:                                                              # Binomial Case
+                    axs[0].eventplot([probs], lineoffsets=pred, linelengths=0.5, colors=[colors[pred]])
+                else:                                                                                           # Multinomial Case
+                    axs[0].eventplot([probs[pred]], lineoffsets=pred, linelengths=0.5, colors=[colors[pred]])
             
             # Plotting the incorrect classifications
             else:
                 # Choose the probability to plot: predicted class's probability or true class's probability
-                prob_to_plot = probs[true] if probability_of_correct_class else probs[pred]
+                if len(self.raw_predictions.shape) == 1:                                                              # Binomial Case
+                    prob_to_plot = probs
+                else:                                                                                           # Multinomial Case
+                    prob_to_plot = probs[true] if probability_of_correct_class else probs[pred]
                 axs[1].eventplot([prob_to_plot], lineoffsets=pred, linelengths=0.5, colors=[colors[true]])
 
         axs[0].set_title('Correct Classifications')
@@ -480,7 +495,14 @@ class MulticlassClassificationEvaluation:
         for ax in axs:
             ax.set_yticks(range(n_classes))
             if self.assign_labels:
-                ax.set_yticklabels([f'{self.outcome_matrix.columns[i]}' for i in range(n_classes)])
+                labels = list(self.outcome_matrix.columns)
+                # Conditionally handle the binomial case
+                if n_classes == 1:  # Binomial case, only one class label
+                    positive_label = labels[0]
+                    negative_label = f"not {positive_label}"
+                    labels = [negative_label, positive_label]  # Create both labels for binomial case
+                    ax.set_yticks([0, 1])  # Ensure ticks match the two labels
+                ax.set_yticklabels(labels)
             else:
                 ax.set_yticklabels([f'Class {i}' for i in range(n_classes)])
 
@@ -552,6 +574,10 @@ class MulticlassOneVsAllROC(MulticlassClassificationEvaluation):
         
     def plot_confusion_matrix(self):
         labels = self.observations_df.columns
+        if len(labels) == 1:                                                        # Binomial case (one positive class)
+            positive_label = labels[0]                                              # Assuming the first (and only) label is the positive case
+            negative_label = f"not {positive_label}"
+            labels = [negative_label, positive_label]
         conf_matrix = confusion_matrix(self.observations, self.predictions, normalize=self.normalization) #set the indices to actually be labels
         # Plot the confusion matrix
         plt.figure(figsize=(8, 6))
@@ -662,7 +688,10 @@ class MulticlassOneVsAllROC(MulticlassClassificationEvaluation):
         
         # Binarize the output
         for i in range(n_classes):
-            fpr[i], tpr[i], _ = roc_curve(self.raw_observations[:, i], self.raw_predictions[:, i])
+            if len(self.raw_predictions.shape)==1:                                                      # binomial case
+                fpr[i], tpr[i], _ = roc_curve(self.raw_observations, self.raw_predictions)
+            else:                                                                                       # multinomial case
+                fpr[i], tpr[i], _ = roc_curve(self.raw_observations[:, i], self.raw_predictions[:, i])
             roc_auc[i] = auc(fpr[i], tpr[i])
         
         # Plot all ROC curves
@@ -710,9 +739,13 @@ class MulticlassOneVsAllROC(MulticlassClassificationEvaluation):
         """
         self.optimal_thresholds = {}
         for i in range(self.outcome_matrix.shape[1]):
-            # Binarize the output for the current class
-            true_bin = self.raw_observations[:, i]
-            prob_pred = self.raw_predictions[:, i]
+            # Binarize the output for the current class 
+            if len(self.raw_predictions.shape) == 1:                # Binomial Case
+                true_bin = self.raw_observations
+                prob_pred = self.raw_predictions
+            else:                                                   # Multinomial case
+                true_bin = self.raw_observations[:, i]
+                prob_pred = self.raw_predictions[:, i]
             
             # Calculate the ROC curve
             fpr, tpr, thresholds = roc_curve(true_bin, prob_pred)
@@ -756,10 +789,10 @@ class MacroAverageROC(MulticlassOneVsAllROC):
         # Then interpolate all ROC curves at these points
         mean_tpr = np.zeros_like(all_fpr)
         for i in range(n_classes):
-            if self.results is not None:
-                fpr, tpr, _ = roc_curve(self.outcome_matrix.iloc[:, i], self.results.predict()[:, i])
-            else:
-                fpr, tpr, _ = roc_curve(self.outcome_matrix.iloc[:, i], self.predictions_df.iloc[:, i])
+            if len(self.raw_predictions.shape) == 1:                    # Binomial Case
+                fpr, tpr, _ = roc_curve(self.outcome_matrix, self.results.predict()) if self.results is not None else roc_curve(self.outcome_matrix, self.predictions_df)
+            else:                                                       # Multinomial Case
+                fpr, tpr, _ = roc_curve(self.outcome_matrix.iloc[:, i], self.results.predict()[:, i]) if self.results is not None else roc_curve(self.outcome_matrix.iloc[:, i], self.predictions_df.iloc[:, i])
             
             mean_tpr += np.interp(all_fpr, fpr, tpr)
         
@@ -793,7 +826,7 @@ class MacroAverageROC(MulticlassOneVsAllROC):
         Orchestrates the evaluation including the macro-average ROC curve.
         """
         super().run()
-        self.plot_macro_average_roc_curve()
+        if len(self.raw_predictions.shape) != 1: self.plot_macro_average_roc_curve()                 # only plot in Multinomial Case
         
 class MicroAverageROC(MacroAverageROC):
     """
@@ -839,7 +872,7 @@ class MicroAverageROC(MacroAverageROC):
         Orchestrates the evaluation including both the macro-average and micro-average ROC curves.
         """
         super().run()
-        self.plot_micro_average_roc_curve()
+        if len(self.raw_predictions.shape) != 1: self.plot_micro_average_roc_curve()                 # only plot in Multinomial Case
         
 class MulticlassAUPRC(MicroAverageROC):
     '''
@@ -897,11 +930,13 @@ class MulticlassAUPRC(MicroAverageROC):
 
         # Compute PR curve and AUPRC for each class
         for i in range(n_classes):
-            if self.results is not None:
-                precision, recall, _ = precision_recall_curve(self.outcome_matrix.iloc[:, i], self.results.predict()[:, i])
-            else:
-                precision, recall, _ = precision_recall_curve(self.outcome_matrix.iloc[:, i], self.predictions_df.iloc[:, i])
-            expected = np.sum(self.outcome_matrix.iloc[:, i]) / self.outcome_matrix.shape[0]
+            
+            if len(self.raw_predictions.shape)==1:                   # Binomial Case
+                precision, recall, _ = precision_recall_curve(self.outcome_matrix, self.results.predict()) if self.results is not None else precision_recall_curve(self.outcome_matrix, self.predictions_df)
+                expected = np.sum(self.outcome_matrix) / self.outcome_matrix.shape[0]
+            else:                                                    # Multinomial Case
+                precision, recall, _ = precision_recall_curve(self.outcome_matrix.iloc[:, i], self.results.predict()[:, i]) if self.results is not None else precision_recall_curve(self.outcome_matrix.iloc[:, i], self.predictions_df.iloc[:, i])
+                expected = np.sum(self.outcome_matrix.iloc[:, i]) / self.outcome_matrix.shape[0]
             
             # Interpolate all PR curves at these points
             mean_precision += np.interp(all_recall, recall[::-1], precision[::-1])
@@ -921,7 +956,10 @@ class MulticlassAUPRC(MicroAverageROC):
 
         # Plot the macro-average PR curve
         plt.figure(figsize=(10, 8))
-        plt.plot(all_recall, mean_precision, color='k', lw=2, label=f'Macro Avg. (area = {mean_auprc:.2f} | expected ] {mean_expected:.2f})')
+        if len(self.raw_predictions.shape) == 1: 
+            plt.plot(all_recall, mean_precision, color='k', lw=2, label=f'Macro Avg. (area = {mean_auprc} | expected = {mean_expected})')
+        else:
+            plt.plot(all_recall, mean_precision, color='k', lw=2, label=f'Macro Avg. (area = {mean_auprc:.2f} | expected = {mean_expected:.2f})')
 
         plt.xlabel('Recall (Sensitivity)')
         plt.ylabel('Precision (PPV)')
@@ -936,7 +974,7 @@ class MulticlassAUPRC(MicroAverageROC):
     def run(self):
         super().run()
         self.plot_macro_average_auprc()
-        self.plot_one_vs_all_auprc()
+        if len(self.raw_predictions.shape) != 1: self.plot_one_vs_all_auprc()           # only plot in Multinomial Case
 
 
 class ComprehensiveMulticlassROC(MulticlassAUPRC):
@@ -1120,7 +1158,7 @@ def permute_auc_difference(data_df, formula1, formula2, cal_palm, n_iterations=1
     
     return obs_diff, lower_ci, upper_ci, p_value
 
-def bootstrap_auc(outcome_matrix, design_matrix, n_iterations=1000):
+def bootstrap_auc(outcome_matrix, design_matrix, n_iterations=1000, model=None):
     auc_scores = []
     n_samples = outcome_matrix.shape[0]
     
@@ -1134,11 +1172,14 @@ def bootstrap_auc(outcome_matrix, design_matrix, n_iterations=1000):
                 design_matrix_resampled = design_matrix.iloc[resample_idx]
 
                 # Fit the logistic regression model
-                logreg = LogisticRegression(outcome_matrix_resampled, design_matrix_resampled)
-                results = logreg.run()
-
+                if model is None:
+                    logreg = LogisticRegression(outcome_matrix_resampled, design_matrix_resampled)
+                    results = logreg.run()
+                    test = ComprehensiveMulticlassROC(fitted_model=results, observation_df=outcome_matrix_resampled, normalization='true', thresholds=None, out_dir=None)
+                else:
+                    results = model.predict(design_matrix_resampled)
+                    test = ComprehensiveMulticlassROC(fitted_model=None, predictions_df=results, observation_df=outcome_matrix_resampled, normalization='true', thresholds=None, out_dir=None)
                 # Evaluate the model
-                test = ComprehensiveMulticlassROC(fitted_model=results, observation_df=outcome_matrix_resampled, normalization='true', thresholds=None, out_dir=None)
                 micro_auc = test.get_micro_auc()
                 auc_scores.append(micro_auc)
         except:

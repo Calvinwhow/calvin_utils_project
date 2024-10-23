@@ -41,6 +41,8 @@ class CalvinStatsmodelsPalm(CalvinPalm):
             X[voxelwise_variable] = data_df[voxelwise_variable]
         else:
             y, X = patsy.dmatrices(formula, data_df, return_type='dataframe')
+        if y.shape[1] == 2:         # remove second column in binomial case
+            y = y.iloc[:,[0]]
         return y, X
 
     def drop_nans_from_columns(self, columns_to_drop_from=None):

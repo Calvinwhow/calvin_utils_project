@@ -250,15 +250,24 @@ class CalvinFWEMap():
         """Permute the patient data by randomly assigning patient data (columnar data) to new patients (columns)"""
         return self.variable_dataframe.sample(frac=1, axis=1, random_state=None)
     
-    def get_correlation_map(self, permute=False):
+    def bootstrap_covariates(self):
+        """Bootstrap the patient data by resampling WITH REPLACEMENT. Assigning patient data (columnar data) to new patients (columns)"""
+        sampled_columns = np.random.choice(self.variable_dataframe.columns, len(self.variable_dataframe.columns), replace=True)
+        return self.variable_dataframe.loc[:, sampled_columns]
+    
+    def get_correlation_map(self, permute=False, bootstrap=False):
         '''
         Params:
         permute (bool): whether to permute the dependent variable before performing the correlation map. 
         '''
-        if permute==False:
+        if permute==False & bootstrap==False:
             return self.correlation()
-        else:
+        elif permute:
             return self.correlation(self.permute_covariates(), debug=False)
+        elif bootstrap:
+            return self.correlation(self.bootstrap_covariates(), debug=False)
+        else:
+            raise ValueError("Invalid arg in function get_correlation_map. Set a boolean value for perm ute or bootstrap.")
     
     def efficient_rankdata(self, arr, axis=0):
         """

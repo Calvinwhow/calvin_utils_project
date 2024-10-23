@@ -45,6 +45,11 @@ class CalvinFWEWrapper:
                                         vectorize=vectorize)  
          
     #----Basic Preparatory Functions----#
+    def check_array(self, data):
+        if type(data) != np.array:
+            data = np.array(data)
+        return data
+            
     def get_roi_mask(self):
         if self.roi_path is not None:
             self.roi_data_3d = nib.load(self.roi_path).get_fdata()
@@ -91,17 +96,35 @@ class CalvinFWEWrapper:
             perm1, perm2 = self.remove_nans_and_infs(perm1, perm2)
             yield perm1, perm2
             
-    def run_analysis(self, comparison_function, n_permutations=1000):
+    def get_bootstrapped_maps(self, n_bootstraps=1000):
+        for _ in tqdm(range(n_bootstraps), desc='Running bootstraps'):
+            boot1 = self.calvin_fwe1.unmask_dataframe(self.calvin_fwe1.get_correlation_map(permute=False, bootstrap=True))
+            if self.map_path is None:
+                boot2 = self.calvin_fwe2.unmask_dataframe(self.calvin_fwe2.get_correlation_map(permute=False, bootstrap=True))
+            else:
+                boot2 = self.observed_2
+            if self.roi_path is not None:
+                boot1 = self.apply_roi_mask(boot1)
+                boot2 = self.apply_roi_mask(boot2)
+            boot1, boot2 = self.remove_nans_and_infs(boot1, boot2)
+            yield boot1, boot2
+            
+    def run_analysis(self, comparison_function, n_permutations=1000, bootstrap=False):
         observed_1, observed_2 = self.get_observed_maps()
         observed_result = comparison_function(observed_1, observed_2)
         
-        permuted_results = []
-        for perm1, perm2 in self.get_permuted_maps(n_permutations):
-            permuted_result = comparison_function(perm1, perm2)
-            permuted_results.append(permuted_result)
+        results = []
+        if bootstrap:                   # Run bootstrap
+            for boot1, boot2 in self.get_bootstrapped_maps(n_permutations):
+                boot_result = comparison_function(boot1, boot2)
+                results.append(boot_result)
+        else:                           # Run permutation
+            for perm1, perm2 in self.get_permuted_maps(n_permutations):
+                permuted_result = comparison_function(perm1, perm2)
+                results.append(permuted_result)
         
-        self.p_value_calculation(observed_result, permuted_results)
-        return observed_result, permuted_results
+        self.p_value_calculation(observed_result, results)
+        return observed_result, results
 
     def p_value_calculation(self, observed_results, permuted_results):
         """
@@ -111,6 +134,11 @@ class CalvinFWEWrapper:
         # Calculate P-Values
         observed_results = (np.abs(observed_results) if self.two_tail else observed_results)
         permuted_results = (np.abs(permuted_results) if self.two_tail else permuted_results)
+        
+        observed_results = self.check_array(observed_results)
+        permuted_results = self.check_array(permuted_results)
+        if observed_results.shape == (1,):
+            observed_results = observed_results.reshape(-1,1)
         p_values = np.mean(observed_results >= permuted_results, axis=0)
         print(f"Observed: {observed_results}, p-value {p_values}, using 2-tail: {self.two_tail}.")
 
@@ -142,6 +170,11 @@ class CalvinFWEWrapper:
 
         distance = euclidean(peak_voxel1_3d, peak_voxel2_3d)
         return distance
+    
+    def calculate_peak_correlation(self, map1, map2, abs=False):
+        map_1_max = np.max(np.abs(map1) if abs else map1)
+        map_2_max = np.max(np.abs(map2) if abs else map2)
+        return map_1_max - map_2_max
 
     #----Functions to Call Statistical Analysis----#
     def run_pearson_analysis(self, n_permutations=1000):
@@ -149,4 +182,10 @@ class CalvinFWEWrapper:
 
     def run_peak_voxel_analysis(self, n_permutations=1000):
         return self.run_analysis(self.calculate_peak_voxel_distance, n_permutations)
+    
+    def run_peak_corr_analysis(self, n_permutations=1000):
+        return self.run_analysis(self.calculate_peak_correlation, n_permutations)
+    
+    def bootstrap_peak_corr(self, n_permutations=1000):
+        return self.run_analysis(self.calculate_peak_correlation, n_permutations, bootstrap=True)
 
