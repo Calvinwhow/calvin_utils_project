@@ -5,7 +5,7 @@ import plotly.graph_objects as go
 import statsmodels.formula.api as smf
 from statsmodels.genmod.generalized_linear_model import GLMResults
 
-class InteractionPlot:
+class GLMPlot:
     def __init__(self, model_results: GLMResults, data_df: pd.DataFrame, formula: str = None):
         """
         Initialize the InteractionPlot class with model results, data, and an optional formula.
@@ -80,7 +80,7 @@ class InteractionPlot:
             Y_HAT = self.model_results.predict(X_grid).values.reshape(num_slices, num_slices)
         except ValueError as e: 
             if self.formula is not None:
-                self.model_results = smf.ols(formula, data=data_df).fit()
+                self.model_results = smf.ols(self.formula, data=self.data_df).fit()
                 Y_HAT = self.model_results.predict(X_grid).values.reshape(num_slices, num_slices)
             else:
                 raise ValueError(f"\n Value Error--to solve, pass the formula used for the original model to the init. \n Traceback: {e}")
@@ -101,6 +101,72 @@ class InteractionPlot:
         plot_residuals : bool, optional
             If True, plots the data points and residuals, default is False.
         """
+        # Function to update the points and residuals on the plot
+        def plot_points_and_residuals(fig, slider_vals):
+            # Plot actual data points
+            fig.add_trace(go.Scatter3d(
+                x=self.data_df[x1], y=self.data_df[x2], z=self.data_df[self.outcome],
+                mode='markers', marker=dict(color='red', size=5), name='Actual Points'))
+
+            # Calculate and plot residuals (lines from actual to predicted values)
+            for _, row in self.data_df.iterrows():
+                x1_val, x2_val, y_val = row[x1], row[x2], row[self.outcome]
+                slider_data = {var: slider_vals[i] for i, var in enumerate(slider_vars)}
+                pred_val = self.model_results.predict(pd.DataFrame({**{x1: [x1_val], x2: [x2_val]}, **slider_data})).values[0]
+                
+                # Add residual line without showing it in the legend
+                fig.add_trace(go.Scatter3d(
+                    x=[x1_val, x1_val], y=[x2_val, x2_val], z=[y_val, pred_val],
+                    mode='lines', line=dict(color='blue', dash='dash'), name='Residual', showlegend=False))  # Hide residuals from legend
+        # Internal function to create sliders and position them correctly
+        def create_sliders(slider_vars, initial_slider_vals):
+            sliders = []
+            
+            # Calculate total padding area
+            total_padding_space = 0.2  # Reserve 20% of the figure height for sliders
+            
+            # Calculate the start position for the first slider and the step
+            slider_height_start = total_padding_space * 0.01  # Start at 10% of the padding area
+            slider_height_step = total_padding_space / len(slider_vars)  # Evenly distribute sliders
+
+            for i, slider_var in enumerate(slider_vars):
+                # Define the steps for the slider (using min, max, and median as initial)
+                slider_steps = [
+                    dict(method='restyle',
+                        args=[{'z': [update_grid_with_slider_values([val if j == i else initial_slider_vals[j] for j, _ in enumerate(slider_vars)])]}],
+                        label=str(round(val, 2)))
+                    for val in np.linspace(min(self.data_df[slider_var]), max(self.data_df[slider_var]), num=10)
+                ]
+
+                # Add the slider for the variable
+                sliders.append({
+                    'active': 5,
+                    'currentvalue': {"prefix": f"{slider_var}: "},
+                    'pad': {"t": 0},
+                    'y': slider_height_start + i * slider_height_step,  # Increment position for each slider relative to the padding area
+                    'len': 0.9,  # Length of the slider (0 to 1)
+                    'steps': slider_steps
+                })
+            return sliders, total_padding_space
+        def _add_sliders(fig, sliders, total_padding_space):
+            # Update the layout with sliders
+            fig.update_layout(
+                scene=dict(
+                    xaxis_title=labels.get('x', x1) if labels else x1,
+                    yaxis_title=labels.get('y', x2) if labels else x2,
+                    zaxis_title=labels.get('z', self.outcome) if labels else self.outcome,
+                    domain=dict(y=[total_padding_space, 1.0])  # Shrink the plot to leave space for sliders
+                ),
+                sliders=sliders
+            )
+
+            # Adjust figure height based on the number of sliders
+            fig.update_layout(
+                width=1200,
+                height=800 + len(slider_vars) * 100,  # Adjust height to account for padding and slider count
+                margin=dict(l=20, r=20, t=20, b=20 + len(slider_vars) * 30)  # Add bottom margin to hold sliders
+            )
+            return fig
         # The first two variables are plotted on x and y axes, the rest will have sliders
         x_vars = self.independent_vars
         x1, x2 = x_vars[:2]
@@ -137,80 +203,24 @@ class InteractionPlot:
         # Add the surface plot with initial data
         fig.add_trace(go.Surface(z=y_pred_initial, x=x1_vals, y=x2_vals, colorscale='Greys', opacity=0.7))
 
-        # Function to update the points and residuals on the plot
-        def plot_points_and_residuals(fig, slider_vals):
-            # Plot actual data points
-            fig.add_trace(go.Scatter3d(
-                x=self.data_df[x1], y=self.data_df[x2], z=self.data_df[self.outcome],
-                mode='markers', marker=dict(color='red', size=5), name='Actual Points'))
-
-            # Calculate and plot residuals (lines from actual to predicted values)
-            for _, row in self.data_df.iterrows():
-                x1_val, x2_val, y_val = row[x1], row[x2], row[self.outcome]
-                slider_data = {var: slider_vals[i] for i, var in enumerate(slider_vars)}
-                pred_val = self.model_results.predict(pd.DataFrame({**{x1: [x1_val], x2: [x2_val]}, **slider_data})).values[0]
-                
-                # Add residual line without showing it in the legend
-                fig.add_trace(go.Scatter3d(
-                    x=[x1_val, x1_val], y=[x2_val, x2_val], z=[y_val, pred_val],
-                    mode='lines', line=dict(color='blue', dash='dash'), name='Residual', showlegend=False))  # Hide residuals from legend
-
-
+        
         # Plot the initial points and residuals if the boolean flag is set
         if plot_residuals:
             plot_points_and_residuals(fig, initial_slider_vals)
 
-        # Internal function to create sliders and position them correctly
-        def create_sliders(slider_vars, initial_slider_vals):
-            sliders = []
-            
-            # Calculate total padding area
-            total_padding_space = 0.2  # Reserve 20% of the figure height for sliders
-            
-            # Calculate the start position for the first slider and the step
-            slider_height_start = total_padding_space * 0.01  # Start at 10% of the padding area
-            slider_height_step = total_padding_space / len(slider_vars)  # Evenly distribute sliders
-
-            for i, slider_var in enumerate(slider_vars):
-                # Define the steps for the slider (using min, max, and median as initial)
-                slider_steps = [
-                    dict(method='restyle',
-                        args=[{'z': [update_grid_with_slider_values([val if j == i else initial_slider_vals[j] for j, _ in enumerate(slider_vars)])]}],
-                        label=str(round(val, 2)))
-                    for val in np.linspace(min(self.data_df[slider_var]), max(self.data_df[slider_var]), num=10)
-                ]
-
-                # Add the slider for the variable
-                sliders.append({
-                    'active': 5,
-                    'currentvalue': {"prefix": f"{slider_var}: "},
-                    'pad': {"t": 0},
-                    'y': slider_height_start + i * slider_height_step,  # Increment position for each slider relative to the padding area
-                    'len': 0.9,  # Length of the slider (0 to 1)
-                    'steps': slider_steps
-                })
-            return sliders, total_padding_space
-
         # Create and position sliders
-        sliders, total_padding_space = create_sliders(slider_vars, initial_slider_vals)
-
-        # Update the layout with sliders
-        fig.update_layout(
-            scene=dict(
-                xaxis_title=labels.get('x', x1) if labels else x1,
-                yaxis_title=labels.get('y', x2) if labels else x2,
-                zaxis_title=labels.get('z', self.outcome) if labels else self.outcome,
-                domain=dict(y=[total_padding_space, 1.0])  # Shrink the plot to leave space for sliders
-            ),
-            sliders=sliders
-        )
-
-        # Adjust figure height based on the number of sliders
-        fig.update_layout(
-            width=1200,
-            height=800 + len(slider_vars) * 100,  # Adjust height to account for padding and slider count
-            margin=dict(l=20, r=20, t=20, b=20 + len(slider_vars) * 30)  # Add bottom margin to hold sliders
-        )
+        if slider_vars != []:
+            sliders, total_padding_space = create_sliders(slider_vars, initial_slider_vals)
+            fig = _add_sliders(fig, sliders, total_padding_space)
+        else:
+            fig.update_layout(
+                scene=dict(
+                    xaxis_title=labels.get('x', x1) if labels else x1,
+                    yaxis_title=labels.get('y', x2) if labels else x2,
+                    zaxis_title=labels.get('z', self.outcome) if labels else self.outcome
+                )
+            )
+            fig.update_layout(width=1200,height=800)
 
         # Save as HTML for interaction
         if out_dir is not None:
@@ -218,7 +228,6 @@ class InteractionPlot:
             print('Saved to file', out_dir)
 
         return fig
-
 
     def run(self, num_slices: int = 100, out_dir: str = None, plot_residuals: bool = True):
         """
