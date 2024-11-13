@@ -11,14 +11,23 @@ def generate_composite(dataframes_dict: dict, csfgm_only: bool=True, sign_flip_c
     Parameters:
     - dataframes_dict (dict): A dictionary where keys are strings representing the names of DataFrames, 
                               and values are pandas DataFrames.
+    - csfgm_only (bool): Whether to only make compound maps of CSF and GM. 
+    - sign_flip_csf (bool): whether to flip sign of CSF or other segments. If true, multiplies CSF
+        by negative 1, setting more atrophy to be more negative. If false, multiplies all others by -1,
+        setting more atrophy to be more positive. 
 
     Returns:
     - dict: The input dictionary updated with additional keys for each combination of DataFrames. 
             Each new key contains the sum of the combined DataFrames' values.
     """
+    if sign_flip_csf: 
+        dataframes_dict['cerebrospinal_fluid'] = dataframes_dict['cerebrospinal_fluid']*-1
+    else:
+        for key in dataframes_dict.keys():
+            if key != 'cerebrospinal_fluid': dataframes_dict[k] = dataframes_dict[k]*-1
+        
     if csfgm_only:
-        if sign_flip_csf: dataframes_dict['csf-plus-gm'] = (dataframes_dict['cerebrospinal_fluid']*-1) + dataframes_dict['grey_matter']
-        else: dtaframes_dict['csf-plus-gm'] = dataframes_dict['cerebrospinal_fluid'] + dataframes_dict['grey_matter']
+        dataframes_dict['csf-plus-gm'] = dataframes_dict['cerebrospinal_fluid'] + dataframes_dict['grey_matter']
     else:
         keys = list(dataframes_dict.keys())
         for r in range(2, len(keys)+1):  # Create combinations for r-tuples where r ranges from 2 to len(keys)
@@ -36,7 +45,7 @@ def generate_composite(dataframes_dict: dict, csfgm_only: bool=True, sign_flip_c
                 dataframes_dict[combined_key] = combined_df  # Store the combined DataFrame in the dictionary under the new key
     return dataframes_dict   
 
-def generate_composite_maps(dataframes_dict: dict, sign_flip_csf=True) -> dict:
+def generate_composite_maps(dataframes_dict: dict, csfgm_only=True) -> dict:
     """
     Combines DataFrames in the input dictionary to create composite maps based on absolute values. 
     Generates combinations of DataFrames for all possible combinations of keys in the dictionary, 
@@ -46,11 +55,11 @@ def generate_composite_maps(dataframes_dict: dict, sign_flip_csf=True) -> dict:
     Parameters:
     - dataframes_dict (dict): A dictionary where each key is a string representing the DataFrame's name, 
                               and each value is a pandas DataFrame.
-    - thresholded (bool): A boolean indicating whether to use thresholded values (True) or unthresholded values (False).
+    - csfgm_only (bool): Whether to only make compound maps of CSF and GM. 
 
     Returns:
     - dict: The original dictionary updated with additional keys for each combination of DataFrames. 
             Each new key contains the sum of absolute values of the combined DataFrames.
     """
-    dataframes_dict = generate_composite(dataframes_dict, sign_flip_csf=sign_flip_csf)
+    dataframes_dict = generate_composite(dataframes_dict, csfgm_only=csfgm_only)
     return dataframes_dict
