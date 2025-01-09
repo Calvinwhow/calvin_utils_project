@@ -1,0 +1,16 @@
+{
+    "name": "stim-optimizer",
+    "version": "1.0.0",
+    "description": "Stimulator optimizer project",
+    "main": "stim_optimizer.js",
+    "dependencies": {
+      "mathjs": "^10.6.4",
+      "csv-parser": "^3.0.0"
+    },
+    "scripts": {
+      "test": "node test_stim_optimizer.js"
+    },
+    "author": "",
+    "license": "ISC"
+  }
+  
