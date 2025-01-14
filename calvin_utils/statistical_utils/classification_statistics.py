@@ -7,6 +7,7 @@ import seaborn as sns
 import pandas as pd
 import matplotlib.pyplot as plt
 from sklearn.metrics import accuracy_score, auc, roc_curve, accuracy_score, confusion_matrix, precision_recall_fscore_support, precision_recall_curve, average_precision_score, matthews_corrcoef, confusion_matrix
+from sklearn.metrics import roc_auc_score
 
 
 class BinaryDataMetricsPlotter:
@@ -1011,6 +1012,151 @@ class ComprehensiveMulticlassROC(MulticlassAUPRC):
         self.get_observations()
         micro_auc = self.plot_roc_curves(silent=True)
         return micro_auc
+    
+    @staticmethod
+    def bootstrap_ovr_auroc(
+        raw_observations: np.ndarray,
+        raw_predictions: np.ndarray,
+        outcome_matrix_cols,
+        n_bootstraps: int = 1000,
+        random_state: int = None,
+        ci_alpha: float = 0.95
+    ):
+        """
+        Bootstraps the one-vs-all AUROC for each class.
+
+        Parameters
+        ----------
+        raw_observations : np.ndarray
+            Ground truth one-hot encoded array of shape (n_samples, n_classes).
+        raw_predictions : np.ndarray
+            Predicted probabilities for each class of shape (n_samples, n_classes).
+        outcome_matrix_cols : list-like
+            The column (class) labels, typically from `self.outcome_matrix.columns`.
+        n_bootstraps : int
+            Number of bootstrap iterations.
+        random_state : int
+            Controls reproducibility of the random sampling.
+        ci_alpha : float
+            Confidence interval coverage (0 < ci_alpha < 1). 0.95 -> 95% CI.
+
+        Returns
+        -------
+        auroc_summary_df : pd.DataFrame
+            A table containing mean AUROC, standard deviation, and confidence
+            intervals for each class.
+        bootstrap_results : dict
+            A dictionary with class labels as keys and lists of bootstrapped
+            AUROC values as values.
+        """
+        rng = np.random.default_rng(seed=random_state)
+        n_classes = raw_observations.shape[1]
+
+        bootstrap_results = {}
+        for i in range(n_classes):
+            class_name = outcome_matrix_cols[i]
+            y_true = raw_observations[:, i]
+            y_score = raw_predictions[:, i]
+
+            # Collect bootstrap results for this class
+            boot_aurocs = []
+            n_samples = len(y_true)
+            for _ in range(n_bootstraps):
+                idx = rng.integers(0, n_samples, n_samples)
+                y_true_boot = y_true[idx]
+                y_score_boot = y_score[idx]
+
+                # If bootstrap sample has only one label, store NaN instead
+                if np.unique(y_true_boot).size < 2:
+                    boot_aurocs.append(np.nan)
+                else:
+                    boot_aurocs.append(roc_auc_score(y_true_boot, y_score_boot))
+            print('Done ', class_name)
+            bootstrap_results[class_name] = boot_aurocs
+
+        # Build summary (mean, std, confidence intervals)
+        alpha_lower = (1.0 - ci_alpha) / 2.0
+        alpha_upper = 1.0 - alpha_lower
+        rows = []
+        for class_name, dist in bootstrap_results.items():
+            dist_clean = [x for x in dist if not np.isnan(x)]
+            if len(dist_clean) == 0:
+                rows.append({
+                    "Class": class_name,
+                    "Mean AUROC": np.nan,
+                    "Std": np.nan,
+                    "lower_ci": np.nan,
+                    "upper_ci": np.nan
+                })
+            else:
+                dist_arr = np.array(dist_clean)
+                mean_auroc = np.mean(dist_arr)
+                std_auroc = np.std(dist_arr)
+                lower_ci = np.quantile(dist_arr, alpha_lower)
+                upper_ci = np.quantile(dist_arr, alpha_upper)
+                rows.append({
+                    "Class": class_name,
+                    "Mean AUROC": mean_auroc,
+                    "Std": std_auroc,
+                    "lower_ci": lower_ci,
+                    "upper_ci": upper_ci
+                    })
+
+            auroc_summary_df = pd.DataFrame(rows)
+        return auroc_summary_df, bootstrap_results
+
+    @staticmethod
+    def plot_ovr_auc_with_ci(auroc_summary_df, x_label="AUC", y_label="Classes", ci_alpha=0.95, out_dir=None):
+        """
+        Plots the AUC scores for each class with 95% confidence intervals.
+
+        Args:
+            auroc_summary_df (pd.DataFrame): The summary DataFrame containing 'Class', 'Mean AUROC',
+                                            'Std', and CI columns (e.g., "2.5%", "97.5%").
+            x_label (str): Label for the x-axis (default: "AUC").
+            y_label (str): Label for the y-axis (default: "Classes").
+            ci_alpha (float): Confidence interval level (default: 0.95 for 95% CI).
+        """
+        # Ensure necessary columns exist in the DataFrame
+        required_cols = ["Class", "Mean AUROC", "lower_ci", "upper_ci"]
+        for col in required_cols:
+            if col not in auroc_summary_df:
+                raise ValueError(f"Missing column in DataFrame: {col}")
+        
+        # Sorting data by mean AUROC for better visualization
+        sorted_df = auroc_summary_df.sort_values(by="Mean AUROC", ascending=False)
+        
+        # Initialize the plot
+        plt.figure(figsize=(8, 6))
+        sns.set(style="white")
+        palette = sns.color_palette('tab10', n_colors=len(sorted_df))
+        
+        # Iterate through each row and plot
+        for i, (row, color) in enumerate(zip(sorted_df.itertuples(), palette)):
+            class_name = row.Class
+            mean_auc = row._2  # Assuming "Mean AUROC" is the second column
+            lower_ci = row.lower_ci  # Assuming lower CI is the third column
+            upper_ci = row.upper_ci  # Assuming upper CI is the fourth column
+
+            # Plot the confidence interval line
+            plt.hlines(y=i, xmin=lower_ci, xmax=upper_ci, color=color, alpha=0.7)
+            
+            # Plot the mean AUC as a central dot
+            plt.scatter(mean_auc, i, color=color, zorder=3)
+            
+        # Add a dashed grey line at AUC = 0.50
+        plt.axvline(0.50, color='grey', linestyle='--', linewidth=1, alpha=0.8)
+        
+        # Set axis labels and ticks
+        plt.yticks(range(len(sorted_df)), sorted_df["Class"])
+        plt.xlabel(x_label, fontsize=12)
+        plt.ylabel(y_label, fontsize=12)
+        plt.title("One-vs-All AUC with 95% Confidence Intervals", fontsize=14)
+        
+        plt.tight_layout()
+        if out_dir is not None:
+            plt.savefig(out_dir + 'bootstrapped_ovr_aurocs.svg')
+        plt.show()
                 
 def compute_accuracy(sample, threshold, y_true_variable, independent_variable):
     """
@@ -1089,7 +1235,8 @@ def compute_sensitivity_specificity(data, y_true_variable, independent_variable,
     return sensitivity, specificity
 
 
-###----- Functionally Programmed Functions for Evaluation Using Above Classes -----##
+
+###----- FFunctions for Evaluation Using Above Classes -----##
 '''
 Hanging imports to facilitate easy transplant of code.
 '''

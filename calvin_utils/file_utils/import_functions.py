@@ -346,3 +346,37 @@ class GiiNiiFileImport:
     def run(self):
         self.import_data_based_on_type()
         return self.matrix_df
+
+class DatasetNiftiImporter(GiiNiiFileImport):
+    def __init__(self, csv_path, dataset_col, nifti_col, indep_var_col, covariate_cols):
+        self.csv_path = csv_path
+        self.dataset_col = dataset_col
+        self.nifti_col = nifti_col
+        self.indep_var_col = indep_var_col
+        self.covariate_cols = covariate_cols
+        self.data_dict = {}
+        self._prepare_data_dict()
+
+    def _prepare_data_dict(self):
+        # Load the CSV file into a DataFrame
+        df = pd.read_csv(self.csv_path)
+
+        # Iterate over each unique dataset
+        for dataset in df[self.dataset_col].unique():
+            dataset_df = df[df[self.dataset_col] == dataset]
+
+            # Initialize sub-dictionary for the dataset
+            self.data_dict[dataset] = {
+                'niftis': pd.DataFrame(),
+                'indep_var': pd.DataFrame(),
+                'covariates': pd.DataFrame()
+            }
+
+            # Extract NIFTI file paths and import them using GiiNiiFileImport
+            nifti_paths = dataset_df[self.nifti_col].tolist()
+            nifti_importer = GiiNiiFileImport(import_path=None, file_column=None, file_pattern=None)
+            self.data_dict[dataset]['niftis'] = nifti_importer.import_matrices(nifti_paths)
+
+            # Extract independent variable and covariates
+            self.data_dict[dataset]['indep_var'] = dataset_df.loc[:,[self.indep_var_col]]
+            self.data_dict[dataset]['covariates'] = dataset_df.loc[:, [self.covariate_cols]]
