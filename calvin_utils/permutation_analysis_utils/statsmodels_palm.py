@@ -96,7 +96,7 @@ class CalvinStatsmodelsPalm(CalvinPalm):
         return self.df, other_df
 
 
-    def standardize_columns(self, cols_to_exclude=None):
+    def standardize_columns(self, cols_to_exclude=None, group_col=None):
         """
         Standardizes the columns of the DataFrame except those listed to exclude.
 
@@ -105,13 +105,21 @@ class CalvinStatsmodelsPalm(CalvinPalm):
         """
         if cols_to_exclude is None:
             cols_to_exclude = []
+        if group_col is not None:
+            unique_groups = self.df[group_col].unique()
+            for group in unique_groups:
+                group_indices = self.df[self.df[group_col] == group].index
+            _standardize_group(group_indices, cols_to_exclude, group_col)
+        else:
+            _standardize_group(self.df.index, cols_to_exclude)
 
-        for col in self.df.columns:
-            if col not in cols_to_exclude:
-                try:
-                    self.df[col] = (self.df[col] - np.mean(self.df[col])) / np.std(self.df[col])
-                except Exception as e:
-                    print(f'Unable to standardize column {col}')
+        def _standardize_group(indices, cols_to_exclude, group_col=None):
+            for col in self.df.columns:
+                if col not in cols_to_exclude and col != group_col:
+                    try:
+                        self.df.loc[indices, col] = (self.df.loc[indices, col] - np.mean(self.df.loc[indices, col])) / np.std(self.df.loc[indices, col])
+                    except Exception as e:
+                        print(f'Unable to standardize column {col} for group {group_col}')
         return self.df
     
     def run_mixed_effects_model(self, y, X, groups, random_intercepts=True, random_slopes=None):

@@ -33,6 +33,11 @@ class RegressOutCovariates():
         return df, adjusted_indep_vars_list
     
     @staticmethod
+    def regress_out_covariates_using_endog_exog(endog, exog):
+        fitted_model = smf.ols(endog=endog, exog=exog).fit()
+        return fitted_model.resid
+    
+    @staticmethod
     def run(df, dependent_variable_list, covariates_list, intercept=True):
         """
         Params:
