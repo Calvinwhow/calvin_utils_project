@@ -1,4 +1,5 @@
 import statsmodels.formula.api as smf
+import statsmodels.api as sm
 
 class RegressOutCovariates():
     """
@@ -33,8 +34,10 @@ class RegressOutCovariates():
         return df, adjusted_indep_vars_list
     
     @staticmethod
-    def regress_out_covariates_using_endog_exog(endog, exog):
-        fitted_model = smf.ols(endog=endog, exog=exog).fit()
+    def regress_out_covariates_using_endog_exog(endog, exog, add_intercept=True):
+        if add_intercept: 
+            exog = sm.add_constant(exog)
+        fitted_model = sm.OLS(endog=endog, exog=exog).fit()
         return fitted_model.resid
     
     @staticmethod
