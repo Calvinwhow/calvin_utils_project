@@ -96,7 +96,7 @@ class GiiNiiFileImport:
     def generate_unique_column_name(self, file_path: str) -> str:
         base_name = os.path.basename(file_path)
         if base_name in self.seen_names:
-            name = os.path.join(os.path.basename(os.path.dirname(file_path)), base_name)
+            name = file_path
         else:
             name = base_name
             self.seen_names.add(base_name)
