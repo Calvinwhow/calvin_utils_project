@@ -93,7 +93,7 @@ class GiiNiiFileImport:
         self.import_path = import_path
         self.file_pattern = file_pattern
         self.file_column = file_column
-        self.subject_pattern = subject_pattern
+        self.subject_pattern = re.compile(subject_pattern) if subject_pattern is not None else None
         self.process_special_values = process_special_values
         self.matrix_df = pd.DataFrame({})
         self.seen_names = set()
@@ -109,10 +109,13 @@ class GiiNiiFileImport:
         return name
     
     def match_id(self, file_path):
-        match = self.pattern.search(file_path)
+        match = self.subject_pattern.search(file_path)
         if match:
-            subject_id = match.group()
-            return subject_id + '_' + os.path.basename(file_path)
+            start_index = match.start()
+            subject_id = file_path[start_index:]
+            return subject_id
+        else:
+            return None
         
     def generate_name(self, file_path: str):
         """
@@ -131,8 +134,8 @@ class GiiNiiFileImport:
             A generated name based on the file path and the specified pattern.
         """
 
-        if self.subject_pattern != '':
-            name = self.match_id()
+        if self.subject_pattern is not None:
+            name = self.match_id(file_path)
         else:
             name = self.generate_unique_column_name(file_path)
         return name 

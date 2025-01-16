@@ -178,14 +178,64 @@ class CalvinFWEWrapper:
 
     #----Functions to Call Statistical Analysis----#
     def run_pearson_analysis(self, n_permutations=1000):
+        """similarity of 2 maps"""
         return self.run_analysis(self.calculate_pearson_correlation, n_permutations)
 
     def run_peak_voxel_analysis(self, n_permutations=1000):
+        """
+        Run peak voxel distance analysis with a specified number of permutations.
+        
+        This method calculates the peak voxel distance between two maps using the 
+        `calculate_peak_voxel_distance` function and performs the analysis over a 
+        specified number of permutations. The peak voxel distance is the Euclidean 
+        distance between the peak voxels of two maps.
+
+        Args:
+            n_permutations (int): The number of permutations to run for the analysis. 
+                                Default is 1000.
+
+        Returns:
+            The result of the analysis which includes the distribution of peak voxel 
+            distances across the permutations.
+
+        Note:
+            This method does not find the exact location of the peak voxels, only the 
+            distance between them.
+        """
         return self.run_analysis(self.calculate_peak_voxel_distance, n_permutations)
     
     def run_peak_corr_analysis(self, n_permutations=1000):
+        """
+        Run peak correlation analysis with a specified number of permutations.
+        This method calculates the peak correlation using the `calculate_peak_correlation` 
+        function and performs the analysis over a number of permutations.
+        Args:
+            n_permutations (int): The number of permutations to run for the analysis. 
+                                  Default is 1000.
+        Returns:
+            The result of the analysis which includes the magnitude of the peak correlation 
+            across the permutations.
+        Note:
+            This method does not find the location of the peak correlation, only the magnitude.
+        """
+        
         return self.run_analysis(self.calculate_peak_correlation, n_permutations)
     
     def bootstrap_peak_corr(self, n_permutations=1000):
+        """
+        Perform bootstrap analysis to calculate peak correlation.
+        This method performs a bootstrap analysis by repeatedly sampling with replacement 
+        from the data and calculating the peak correlation for each sample. The number of 
+        bootstrap samples is determined by the `n_permutations` parameter.
+        Parameters:
+        -----------
+        n_permutations : int, optional
+            The number of bootstrap samples to generate. Default is 1000.
+        Returns:
+        --------
+        result : Any
+            The result of the analysis, as returned by the `run_analysis` method.
+        """
+        
         return self.run_analysis(self.calculate_peak_correlation, n_permutations, bootstrap=True)
 
