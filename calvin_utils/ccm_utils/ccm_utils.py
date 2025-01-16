@@ -5,6 +5,15 @@ import numpy as np
 from scipy.stats import spearmanr, pearsonr
 import pandas as pd
 from tqdm import tqdm
+from calvin_utils.ccm_utils.npy_utils import DataLoader
+from calvin_utils.ccm_utils.stat_utils import CorrelationCalculator
+from calvin_utils.ccm_utils.ccm_utils import ConvergentMapGenerator
+import seaborn as sns
+from matplotlib.colors import TwoSlopeNorm
+import matplotlib.pyplot as plt
+import matplotlib.cm as cm
+from matplotlib.colors import LinearSegmentedColormap
+
 
 class ConvergentMapGenerator:
     def __init__(self, corr_map_dict, data_loader, mask_path=None, out_dir=None, weight=False):
@@ -320,3 +329,203 @@ class LOOCVAnalyzer(ConvergentMapGenerator):
         ci_upper = np.percentile(resampled_r, 97.5)
         mean_r = np.mean(resampled_r)
         return ci_lower, ci_upper, mean_r
+
+class CorrelationAnalysis:
+    """
+    A class to perform correlation analysis on neuroimaging data.
+    Attributes:
+    -----------
+    data_dict_path : str
+        Path to the dictionary containing dataset paths.
+    method : str, optional
+        Method to calculate correlation ('pearson' or 'spearman'). Default is 'pearson'.
+    n_permutations : int, optional
+        Number of permutations for the permutation test. Default is 1000.
+    out_dir : str, optional
+        Directory to save the results. Default is None.
+    corr_map_dict : dict
+        Dictionary to store correlation maps.
+    data_loader : DataLoader
+        Instance of DataLoader to load datasets.
+    original_similarity_matrix : np.ndarray
+        Similarity matrix calculated from original data.
+    permuted_similarity_tensor : np.ndarray
+        Tensor of similarity matrices calculated from permuted data.
+    Methods:
+    --------
+    generate_correlation_maps():
+        Generates correlation maps for all datasets.
+    calculate_similarity_matrix(corr_map_dict):
+        Calculates the similarity matrix from correlation maps.
+    permute_and_recompose():
+        Permutes the data and recomposes the correlation maps.
+    calculate_permuted_similarity_matrix(permuted_corr_map_dict):
+        Calculates the similarity matrix from permuted correlation maps.
+    repeat_permutation_process():
+        Repeats the permutation process to generate permuted similarity matrices.
+    save_results():
+        Saves the original and permuted similarity matrices to the output directory.
+    calculate_p_value(method='two_tail'):
+        Calculates the p-value based on the permutation test.
+    calculate_max_stat_p_values(method):
+        Calculates p-values using the maximum statistic method.
+    calculate_pairwise_p_values_uncorrected(method):
+        Calculates uncorrected pairwise p-values.
+    calculate_pairwise_p_values(method='two_tail', max_stat=False):
+        Calculates pairwise p-values, with an option for maximum statistic correction.
+    run():
+        Runs the entire correlation analysis process and returns the p-value and pairwise p-values.
+    """
+    
+    def __init__(self, data_dict_path, method='pearson', n_permutations=1000, out_dir=None):
+        self.data_dict_path = data_dict_path
+        self.method = method
+        self.n_permutations = n_permutations
+        self.out_dir = out_dir
+        self.corr_map_dict = None
+        self.data_loader = None
+        self.original_similarity_matrix = None
+        self.permuted_similarity_tensor = None
+
+    def generate_correlation_maps(self):
+        data_loader = DataLoader(self.data_dict_path)
+        correlation_calculator = CorrelationCalculator(method=self.method, verbose=False)
+        corr_map_dict = correlation_calculator.process_all_datasets(data_loader.dataset_paths_dict)
+        self.corr_map_dict = corr_map_dict
+        self.data_loader = data_loader
+
+    def calculate_similarity_matrix(self, corr_map_dict):
+        dataset_names = list(corr_map_dict.keys())
+        n = len(dataset_names)
+        similarity_matrix = np.zeros((n, n))
+        
+        for i in range(n):
+            for j in range(i, n):
+                if self.method == 'pearson':
+                    similarity = pearsonr(corr_map_dict[dataset_names[i]].flatten(), corr_map_dict[dataset_names[j]].flatten())[0]
+                elif self.method == 'spearman':
+                    similarity = spearmanr(corr_map_dict[dataset_names[i]].flatten(), corr_map_dict[dataset_names[j]].flatten())[0]
+                similarity_matrix[i, j] = similarity
+        return similarity_matrix
+
+    def permute_and_recompose(self):
+        permuted_corr_map_dict = {}
+        for dataset_name in self.data_loader.dataset_paths_dict.keys():
+            data = self.data_loader.load_dataset(dataset_name)
+            np.random.shuffle(data['indep_var'])  # permute
+            correlation_calculator = CorrelationCalculator(method=self.method, verbose=False)
+            correlation_calculator._process_data(data)
+            permuted_corr_map_dict[dataset_name] = correlation_calculator.correlation_map
+        return permuted_corr_map_dict
+
+    def calculate_permuted_similarity_matrix(self, permuted_corr_map_dict):
+        return self.calculate_similarity_matrix(permuted_corr_map_dict)
+
+    def repeat_permutation_process(self):
+        self.generate_correlation_maps()
+        self.original_similarity_matrix = self.calculate_similarity_matrix(self.corr_map_dict)
+        
+        n = len(self.corr_map_dict)
+        self.permuted_similarity_tensor = np.zeros((self.n_permutations, n, n))
+        
+        for i in tqdm(range(self.n_permutations), desc='Running permutations'):
+            permuted_corr_map_dict = self.permute_and_recompose()
+            permuted_similarity_matrix = self.calculate_permuted_similarity_matrix(permuted_corr_map_dict)
+            self.permuted_similarity_tensor[i] = permuted_similarity_matrix
+
+    def save_results(self):
+        if self.out_dir:
+            os.makedirs(self.out_dir, exist_ok=True)
+            np.save(f'{self.out_dir}/original_similarity_matrix.npy', self.original_similarity_matrix)
+            np.save(f'{self.out_dir}/permuted_similarity_tensor.npy', self.permuted_similarity_tensor)
+
+    def calculate_p_value(self, method='two_tail'):
+        observed_avg = np.nanmean(self.original_similarity_matrix)
+        permuted_avg = np.nanmean(self.permuted_similarity_tensor, axis=(1, 2))
+        if method == 'two_tail':
+            p_value = np.mean(np.abs(permuted_avg) > np.abs(observed_avg))
+        elif method == 'one_tail':
+            p_value = np.mean(permuted_avg > observed_avg)
+        else:
+            raise ValueError('Invalid method. Please choose either "one_tail" or "two_tail".')
+        print(f'The {method} p-value is: {p_value}. This is the proportion of permuted averages that are greater than the observed average.')
+        return p_value
+
+    def calculate_max_stat_p_values(self, method):
+        n = self.original_similarity_matrix.shape[0]
+        p_value_matrix = np.full((n, n), np.nan)
+        max_permuted_values = np.max(np.abs(self.permuted_similarity_tensor), axis=(1, 2)) if method == 'two_tail' else np.max(self.permuted_similarity_tensor, axis=(1, 2))
+
+        for i in range(n):
+            for j in range(i, n):
+                observed_value = np.abs(self.original_similarity_matrix[i, j]) if method == 'two_tail' else self.original_similarity_matrix[i, j]
+                p_value = np.mean(max_permuted_values > observed_value)
+                p_value_matrix[i, j] = p_value
+        return p_value_matrix
+
+    def calculate_pairwise_p_values_uncorrected(self, method):
+        n = self.original_similarity_matrix.shape[0]
+        p_value_matrix = np.full((n, n), np.nan)
+
+        for i in range(n):
+            for j in range(i, n):
+                observed_value = self.original_similarity_matrix[i, j]
+                permuted_values = self.permuted_similarity_tensor[:, i, j]
+                if method == 'two_tail':
+                    p_value = np.mean(np.abs(permuted_values) > np.abs(observed_value))
+                elif method == 'one_tail':
+                    p_value = np.mean(permuted_values > observed_value)
+                p_value_matrix[i, j] = p_value
+        return p_value_matrix
+
+    def calculate_pairwise_p_values(self, method='two_tail', max_stat=False):
+        if max_stat:
+            p_val_mx =  self.calculate_max_stat_p_values(method)
+        else:
+            p_val_mx =  self.calculate_pairwise_p_values_uncorrected(method)
+        print("Pairwise P-values")
+        print(p_val_mx)
+        return p_val_mx
+
+    def run(self, tails='two_tail', fwe=False):
+        self.repeat_permutation_process()
+        self.save_results()
+        
+        
+        if tails == 'two_tail':
+            print('Calculating two-tailed p-values')
+        elif tails == 'one_tail':
+            print('Calculating one-tailed p-values')
+        else:
+            raise ValueError('Invalid method. Please choose either "one_tail" or "two_tail".')
+        
+        p_value = self.calculate_p_value(tails)
+        pairwise_p_values = self.calculate_pairwise_p_values(tails, fwe)
+        print('Similarity Matrix: ')
+        print(self.original_similarity_matrix)
+        return p_value, pairwise_p_values
+    
+    @staticmethod
+    def matrix_heatmap(similarity_matrix, type='simiarlity', output_path=None):
+        if type == 'similarity':
+            norm = TwoSlopeNorm(vmin=-1, vcenter=0, vmax=1)
+            output_file = 'similarity_heatmap.svg'
+            cmap = LinearSegmentedColormap.from_list(
+                                                        'RedBlackGreen', 
+                                                        ['red', 'black', 'green']
+                                                    )
+            
+        elif type == 'pvals':
+            bounds = [0, 0.0001, 0.001, 0.01, 0.05, 1]
+            cmap = cm.get_cmap('viridis', len(bounds) - 1)
+            norm = cm.colors.BoundaryNorm(bounds, cmap.N)
+            output_file = 'pvals_heatmap.svg'
+        else:
+            raise ValueError("Invalid input. Please choose either 'similarity' or 'pvals'.")
+
+        fig, ax = plt.subplots(figsize=(8, 6))
+        sns.heatmap(similarity_matrix, square=True, linewidths=1.0, cmap=cmap, norm=norm, ax=ax, cbar=True)
+
+        if output_path:
+            plt.savefig(os.path.join(output_path, output_file))
+        plt.show()
