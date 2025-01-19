@@ -67,7 +67,7 @@ class CSVComposer:
             return matches[0]
         return ''
 
-    def _extract_covariate_value(self, df, row_filter, col_name):
+    def _extract_covariate_value(self, df, row_filter, col_name, infill_colname=True):
         """
         Safely extract a single covariate value.
         If the column doesn't exist or there's no value, return None.
@@ -76,9 +76,11 @@ class CSVComposer:
             return None
 
         selected_vals = df.loc[row_filter, col_name]
-        if not selected_vals.empty:
+        if not selected_vals.empty: 
             return selected_vals.values[0]
-        return None
+        else:
+            if infill_colname: return col_name
+            else: return None
 
     def save_csv(self, output_csv_path):
         """
