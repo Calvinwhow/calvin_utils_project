@@ -247,6 +247,5 @@ def tal2mni(inpoints):
         outpoints[:] = (T2M['upZ_inv'] @ T2M['rotn_inv'] @ inpoints[:])
         
     # Return only the X, Y, Z coordinates
-    print(outpoints[:3])
     return outpoints[:3].flatten()
 

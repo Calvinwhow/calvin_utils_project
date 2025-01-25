@@ -41,8 +41,11 @@ def save_mask(mask, brain_img, mni_arr, out_dir, filename='sphere_roi'):
     mask_img.to_filename(os.path.join(out_dir, filename))
     return plotting.view_img(mask_img, cut_coords=(mni_arr[0],mni_arr[1],mni_arr[2]), black_bg=False, opacity=.75, cmap='ocean_hot')
 
-def prep_bids(subid, out_dir):
-    bids_dir = os.path.join(out_dir, f'sub-{subid}', 'roi')
+def prep_bids(subid, out_dir, session=None):
+    if session is None:
+        bids_dir = os.path.join(out_dir, f'sub-{subid}', f'ses-01', 'roi')
+    else:
+        bids_dir = os.path.join(out_dir, f'sub-{subid}', f'ses-{session}', 'roi')
     os.makedirs(bids_dir, exist_ok=True)
     filename = f'sub-{subid}-MNI152_T1_2mm-tms_sphere_roi.nii.gz'
     return bids_dir, filename
@@ -59,7 +62,7 @@ def get_closest_brain_edge(center_mni, brain_img):
     nearest_edge_coord = mni_coords_in_brain[min_distance_index]                    #shape (1,)   
     return nearest_edge_coord
 
-def generate_spherical_rois_from_df(df, x_col, y_col, z_col, subcol, radius, mask_path, out_dir, project_on_to_brain=False):
+def generate_spherical_rois_from_df(df, x_col, y_col, z_col, subcol, radius, mask_path, out_dir, session_col=None, project_on_to_brain=False):
     # Load the brain mask image
     brain_img = nib.load(mask_path)
 
@@ -85,5 +88,6 @@ def generate_spherical_rois_from_df(df, x_col, y_col, z_col, subcol, radius, mas
 
         # Save the mask
         subject_id = row[subcol]  # Assuming there's a 'subject_id' column
-        bids_dir, filename = prep_bids(subid=subject_id, out_dir=out_dir)
+        session = row[session_col] if session_col is not None else None
+        bids_dir, filename = prep_bids(subid=subject_id, session=session, out_dir=out_dir)
         save_mask(sphere_mask, brain_img, center_mni, bids_dir, filename)
