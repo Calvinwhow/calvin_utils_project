@@ -47,7 +47,19 @@ def prep_bids(subid, out_dir):
     filename = f'sub-{subid}-MNI152_T1_2mm-tms_sphere_roi.nii.gz'
     return bids_dir, filename
 
-def generate_spherical_rois_from_df(df, x_col, y_col, z_col, subcol, radius, mask_path, out_dir):
+def get_closest_brain_edge(center_mni, brain_img):
+    mni_coords_brain = calculate_voxelwise_mni_coords(brain_img)                    #shape (n,3)    
+   
+    brain_mask = brain_img.get_fdata()                                          
+    brain_indices = brain_mask.flatten() == 1                                       #shape (k,3)
+    mni_coords_in_brain = mni_coords_brain[brain_indices]                           #shape (k,3)
+                  
+    edge_distances = calculate_pairwise_distance(center_mni, mni_coords_in_brain)   #shape (k,3)
+    min_distance_index = np.argmin(edge_distances)                                  #shape (1,)
+    nearest_edge_coord = mni_coords_in_brain[min_distance_index]                    #shape (1,)   
+    return nearest_edge_coord
+
+def generate_spherical_rois_from_df(df, x_col, y_col, z_col, subcol, radius, mask_path, out_dir, project_on_to_brain=False):
     # Load the brain mask image
     brain_img = nib.load(mask_path)
 
@@ -62,6 +74,13 @@ def generate_spherical_rois_from_df(df, x_col, y_col, z_col, subcol, radius, mas
         distances = calculate_pairwise_distance(center_mni, mni_coords_brain)
         points_in_sphere = points_within_sphere(distances, radius)
         sphere_mask = generate_sphere_mask(points_in_sphere, brain_img)
+        
+        if project_on_to_brain:
+            closest_coord = get_closest_brain_edge(center_mni, brain_img)               # shape (3,) representing MNI coordinates of closest brain voxel
+            distances = calculate_pairwise_distance(closest_coord, mni_coords_brain)    # 
+            points_in_sphere = points_within_sphere(distances, radius)
+            sphere_mask = generate_sphere_mask(points_in_sphere, brain_img)
+            
         sphere_mask = mask_within_brain(sphere_mask, brain_img)
 
         # Save the mask
