@@ -2,7 +2,7 @@ from nilearn import plotting
 import nibabel as nib
 import os
 import numpy as np
-from scipy.stats import spearmanr, pearsonr
+from scipy.stats import spearmanr, pearsonr, rankdata
 import pandas as pd
 from tqdm import tqdm
 from calvin_utils.ccm_utils.npy_utils import DataLoader
@@ -12,6 +12,7 @@ from matplotlib.colors import TwoSlopeNorm
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 from matplotlib.colors import LinearSegmentedColormap
+from calvin_utils.ccm_utils.stat_utils_jax import _calculate_pearson_r_map_jax, _rankdata_jax
 import time
 
 class ConvergentMapGenerator:
@@ -378,7 +379,7 @@ class CorrelationAnalysis:
         Runs the entire correlation analysis process and returns the p-value and pairwise p-values.
     """
     
-    def __init__(self, data_dict_path, method='pearson', n_permutations=1000, out_dir=None):
+    def __init__(self, data_dict_path, method='pearson', n_permutations=1000, out_dir=None, use_jax=False):
         self.data_dict_path = data_dict_path
         self.method = method
         self.n_permutations = n_permutations
@@ -387,6 +388,7 @@ class CorrelationAnalysis:
         self.data_loader = None
         self.original_similarity_matrix = None
         self.permuted_similarity_tensor = None
+        self.use_jax = use_jax
 
     def generate_correlation_maps(self):
         self.data_loader = DataLoader(self.data_dict_path)
@@ -404,20 +406,44 @@ class CorrelationAnalysis:
                 t0 = time.time()
                 mx_1 = corr_map_dict[dataset_names[i]].flatten()
                 mx_2 = corr_map_dict[dataset_names[j]].flatten()
-
                 t1 = time.time()
+                print('time to flatten ', t1-t0)
                 if self.method == 'pearson':
-                    similarity, _ = pearsonr(mx_1, mx_2)
+                    if self.use_jax: similarity = _calculate_pearson_r_map_jax(mx_1, mx_2)
+                    else: similarity, _ = pearsonr(mx_1, mx_2)
                 elif self.method == 'spearman':
-                    similarity, _ = pearsonr(mx_1, mx_2)
-                t2 = time.time()
+                    # ranked1 = rankdata(mx_1)
+                    # ranked2 = rankdata(mx_2)
+                    # similarity, _ = pearsonr(ranked1, ranked2)
+
+                    # if self.use_jax:
+                    t2 = time.time()
+                    mx_1 = _rankdata_jax(mx_1[:, np.newaxis])
+                    t3 = time.time()
+                    mx_2 = _rankdata_jax(mx_2[:, np.newaxis])
+                    t4 = time.time()
+                    similarity = _calculate_pearson_r_map_jax(mx_1, mx_2)[0][0]
+                    t5 = time.time()
+                    print(f't2-t1 {t2-t1}')
+                    print(f't3-t2 {t3-t2}')
+                    print(f't4-t3 {t4-t3}')
+                    print(f't5-t4 {t5-t3}')
+                    # else: similarity, _ = spearmanr(mx_1, mx_2)
                 # CorrelationCalculator._check_for_nans(similarity, nanpolicy='stop')
                 similarity_matrix[i,j] = similarity
                 similarity_matrix[j,i] = similarity
-                t3 = time.time()
-                print(f"Time for matrix assignment : {t1-t0}")
-                print(f"Time for spearmanr: {t2-t1}")
-                print(f"Time for ij, ji: {t3-t2}")
+
+                if j==0:
+                    print(f"Time for spearmanr: {t2-t1}")
+                    print(corr_map_dict[dataset_names[i]])
+                    print(corr_map_dict[dataset_names[i]])
+                    print(mx_1.shape)
+                    print(mx_2.shape)
+                    t3 = time.time()
+                    r,p=spearmanr(mx_1,mx_2)
+                    t4 = time.time()
+                    print(f"SECOND RUN OF SPEARMANR ON THE SAME DATA; {t4-t3}")
+
         return similarity_matrix
 
     def permute_and_recompose(self):
@@ -521,12 +547,12 @@ class CorrelationAnalysis:
         print(f"Overall p-value: {p_value}")
         return p_value, pairwise_p_values
     
-    def matrix_heatmap(self, similarity_matrix, type='similarity', mask_half=False, output_path=None):
-        # Remove the diagonal of the similarity matrix
+    def matrix_heatmap(self, similarity_matrix, type='similarity', mask_half=False, rm_trace=True, output_path=None):
+        # Clean up the matrix
         if mask_half: 
             similarity_matrix = np.tril(similarity_matrix)
+        if rm_trace:
             np.fill_diagonal(similarity_matrix, np.nan)
-
         if type == 'similarity':
             cmap = LinearSegmentedColormap.from_list('RedBlackGreen', ['red', 'black', 'green'])
             norm = TwoSlopeNorm(vmin=np.nanmin(similarity_matrix), vcenter=0, vmax=np.nanmax(similarity_matrix))
