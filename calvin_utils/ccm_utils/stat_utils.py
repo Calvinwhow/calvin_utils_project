@@ -6,8 +6,7 @@ from jax import jit
 import jax.numpy as jnp
 from scipy.stats import rankdata
 from calvin_utils.ccm_utils.npy_utils import DataLoader
-from calvin_utils.ccm_utils.stat_utils_jax import _rankdata_jax, _calculate_spearman_r_map_jax, _calculate_pearson_r_map_jax
-import time
+from calvin_utils.ccm_utils.stat_utils_jax import _rankdata_jax, calculate_spearman_r_map_jax, _calculate_pearson_r_map_jax
 
 class CorrelationCalculator:
     def __init__(self, method='pearson', verbose=False, use_jax=True):
@@ -62,36 +61,14 @@ class CorrelationCalculator:
         return ranks                                        #returns the rank matrix, not the sorted data. 
 
     def _calculate_spearman_r_map(self, niftis, indep_var):
-        """
-        Calculate the Spearman rank-order correlation coefficient for each voxel
-        in a fully vectorized manner.
-
-        Parameters:
-        -----------
-        niftis : np.array
-            2D array where each row represents a subject and each column represents a voxel.
-        indep_var : np.array
-            1D array representing the independent variable for each subject.
-
-        Returns:
-        --------
-        rho : np.array
-            1D array of Spearman's rank correlation coefficients for each voxel.
-        """
+        """Calculate the Spearman rank-order correlation coefficient for each voxel in a fully vectorized manner."""
         # Rank the data using scipy.stats.rankdata to handle ties
-        t1 = time.time()
         if self.use_jax:
-            return _calculate_spearman_r_map_jax(niftis, indep_var)
+            return calculate_spearman_r_map_jax(niftis, indep_var)
         
         ranked_niftis = self._rankdata(niftis, vectorize=True)
-        t2 = time.time()
         ranked_indep_var = rankdata(indep_var)[:, np.newaxis]
-        t3 = time.time()
         rho = self._calculate_pearson_r_map(ranked_niftis, ranked_indep_var)
-        t4 = time.time()
-        print(f"rank nifti time {t2-t1}")
-        print(f"rank indep time {t3-t2}")
-        print(f"rho calcul time {t4-t3}")
         return rho
 
     def _calculate_pearson_r_map(self, niftis, indep_var):
@@ -129,8 +106,7 @@ class CorrelationCalculator:
             self.correlation_map = self._calculate_pearson_r_map(data['niftis'], data['indep_var'])
         elif self.method == 'spearman':
             self.correlation_map = self._calculate_spearman_r_map(data['niftis'], data['indep_var'])
-        self._check_for_nans(self.correlation_map)
-    
+
     def process_all_datasets(self, data_dict):
         correlation_maps = {}
         for dataset_name in data_dict.keys():

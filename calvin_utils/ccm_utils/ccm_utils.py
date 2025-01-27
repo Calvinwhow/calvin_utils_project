@@ -401,17 +401,23 @@ class CorrelationAnalysis:
         
         for i in range(n):
             for j in range(i, n):
+                t0 = time.time()
                 mx_1 = corr_map_dict[dataset_names[i]].flatten()
                 mx_2 = corr_map_dict[dataset_names[j]].flatten()
-                                
+
+                t1 = time.time()
                 if self.method == 'pearson':
                     similarity, _ = pearsonr(mx_1, mx_2)
                 elif self.method == 'spearman':
-                    similarity, _ = spearmanr(mx_1, mx_2)
-                print(F"{dataset_names[i]} TO {dataset_names[j]} IS {similarity} SIMILAR")
-                CorrelationCalculator._check_for_nans(similarity, nanpolicy='stop')
+                    similarity, _ = pearsonr(mx_1, mx_2)
+                t2 = time.time()
+                # CorrelationCalculator._check_for_nans(similarity, nanpolicy='stop')
                 similarity_matrix[i,j] = similarity
                 similarity_matrix[j,i] = similarity
+                t3 = time.time()
+                print(f"Time for matrix assignment : {t1-t0}")
+                print(f"Time for spearmanr: {t2-t1}")
+                print(f"Time for ij, ji: {t3-t2}")
         return similarity_matrix
 
     def permute_and_recompose(self):
