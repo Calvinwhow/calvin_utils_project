@@ -1,33 +1,65 @@
-from calvin_utils.ccm_utils.npy_utils import DataLoader
-import numpy as np
-from scipy.stats import rankdata
 import os
+import numpy as np
+import pandas as pd
 import forestplot as fp
-
+from jax import jit
+import jax.numpy as jnp
+from scipy.stats import rankdata
+from calvin_utils.ccm_utils.npy_utils import DataLoader
+from calvin_utils.ccm_utils.stat_utils_jax import _rankdata_jax, _calculate_spearman_r_map_jax, _calculate_pearson_r_map_jax
+import time
 
 class CorrelationCalculator:
-    def __init__(self, method='pearson', verbose=False):
+    def __init__(self, method='pearson', verbose=False, use_jax=True):
         self.method = method
         self.verbose = verbose
+        self.use_jax = use_jax
 
-    def vectorized_rankdata(a):
-        """
-        Vectorized ranking function using NumPy.
-
-        Parameters:
-        -----------
-        a : np.array
-            Input array to be ranked.
-
-        Returns:
-        --------
-        ranks : np.array
-            Ranked array.
-        """
-        a = a.flatten()
-        ranks = np.empty_like(a, dtype=float)
-        ranks[np.argsort(a)] = np.arange(len(a)) + 1
-        return ranks
+    @staticmethod
+    def _check_for_nans(array, nanpolicy='remove', verbose=False):
+        '''Check array for nan and raise error if present'''
+        if np.isnan(array).any():
+            if verbose:
+                print("NaN detected in the array.")
+                print(f"Array shape: {array.shape}")
+                print(f"Array with NaNs: {array}")
+                nan_indices = np.argwhere(np.isnan(array))
+                print(f"Indices of NaNs: {nan_indices}")
+                for index in nan_indices:
+                    print(f"NaN at index: {index}, value: {array[tuple(index)]}")
+                inf_indices = np.argwhere(np.isinf(array))
+                if inf_indices.size > 0:
+                    print(f"Indices of Infs: {inf_indices}")
+                    for index in inf_indices:
+                        print(f"Inf at index: {index}, value: {array[tuple(index)]}")
+                
+            if nanpolicy=='remove':
+                max_val = np.nanmax(array)
+                min_val = np.nanmin(array)
+                array = np.nan_to_num(array, nan=0, posinf=max_val, neginf=min_val)
+            elif nanpolicy=='permit':
+                array = array
+            elif nanpolicy=='stop':
+                raise ValueError("The array contains NaNs.")
+            else:
+                raise ValueError("Selected nanpolicy does not exist. choose 'stop' | 'permit' | 'remove' ")
+            return array
+            
+    def _rankdata(self, array, vectorize=True):
+        """Vectorized ranking function using NumPy. Handles ties sloppily."""
+        if self.use_jax:
+            return _rankdata_jax(array, vectorize)
+        
+        if vectorize:       #very fast, but no tie handling.
+            ranks = np.empty_like(array, dtype=float)       #shape (voxels, n) initialized array
+            rows = np.arange(array.shape[0])[:, None]       #shape (voxels, 1) Row indices, ascending in order. 
+            cols = np.arange(array.shape[1])                #shape (1,      n) Col indices, ascending in order. 
+            
+            idx_sorted = np.argsort(array, axis=0)          #shape (voxels, n) Row indices, ascending in rank. For each column. 
+            ranks[idx_sorted, cols] = rows                  #shape (voxels, n) Assigns row indices by ascending rank. For each column. 
+        else:               #very slow, but handles ties better.
+            ranks = np.apply_along_axis(rankdata, 0, array) 
+        return ranks                                        #returns the rank matrix, not the sorted data. 
 
     def _calculate_spearman_r_map(self, niftis, indep_var):
         """
@@ -47,35 +79,25 @@ class CorrelationCalculator:
             1D array of Spearman's rank correlation coefficients for each voxel.
         """
         # Rank the data using scipy.stats.rankdata to handle ties
-        ranked_niftis = np.apply_along_axis(rankdata, 0, niftis)
-        ranked_indep_var = rankdata(indep_var)
-
-        # Calculate the Pearson correlation coefficient on the ranked data
-        # This generates identical results to Scipy.stats.spearmanr
-        X = ranked_indep_var[:, np.newaxis]
-        Y = ranked_niftis
-        X_BAR = X.mean(axis=0)[:, np.newaxis]
-        Y_BAR = Y.mean(axis=0)[np.newaxis, :]
-        X_C = X - X_BAR
-        Y_C = Y - Y_BAR
-        NUMERATOR = np.dot(X_C.T, Y_C)
-        SST_X = np.sum((X - X_BAR)**2, axis=0)
-        SST_Y = np.sum((Y - Y_BAR)**2, axis=0)
-        DENOMINATOR = np.sqrt(SST_X * SST_Y)
-        rho = NUMERATOR / DENOMINATOR
+        t1 = time.time()
+        if self.use_jax:
+            return _calculate_spearman_r_map_jax(niftis, indep_var)
         
-        if self.verbose:
-            print(f"Shape of X: {X.shape}")
-            print(f"Shape of Y: {Y.shape}")
-            print(f"Shape of X_BAR: {X_BAR.shape}")
-            print(f"Shape of Y_BAR: {Y_BAR.shape}")
-            print(f"Shape of X_C: {X_C.shape}")
-            print(f"Shape of Y_C: {Y_C.shape}")
-            print(f"Shape of NUMERATOR: {NUMERATOR.shape}")
-            print(f"Shape of DENOMINATOR: {DENOMINATOR.shape}")
+        ranked_niftis = self._rankdata(niftis, vectorize=True)
+        t2 = time.time()
+        ranked_indep_var = rankdata(indep_var)[:, np.newaxis]
+        t3 = time.time()
+        rho = self._calculate_pearson_r_map(ranked_niftis, ranked_indep_var)
+        t4 = time.time()
+        print(f"rank nifti time {t2-t1}")
+        print(f"rank indep time {t3-t2}")
+        print(f"rho calcul time {t4-t3}")
         return rho
-    
+
     def _calculate_pearson_r_map(self, niftis, indep_var):
+        if self.use_jax:
+            return _calculate_pearson_r_map_jax(niftis, indep_var)
+        
         X = indep_var
         Y = niftis
         X_BAR = X.mean(axis=0)[:, np.newaxis]
@@ -97,13 +119,17 @@ class CorrelationCalculator:
             print(f"Shape of Y_C: {Y_C.shape}")
             print(f"Shape of NUMERATOR: {NUMERATOR.shape}")
             print(f"Shape of DENOMINATOR: {DENOMINATOR.shape}")
+            print("Shape of r: ", r.shape)
         return r
 
     def _process_data(self, data):
+        self._check_for_nans(data['niftis'])
+        self._check_for_nans(data['indep_var'])
         if self.method == 'pearson':
             self.correlation_map = self._calculate_pearson_r_map(data['niftis'], data['indep_var'])
         elif self.method == 'spearman':
             self.correlation_map = self._calculate_spearman_r_map(data['niftis'], data['indep_var'])
+        self._check_for_nans(self.correlation_map)
     
     def process_all_datasets(self, data_dict):
         correlation_maps = {}

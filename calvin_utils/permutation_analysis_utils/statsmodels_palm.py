@@ -96,28 +96,27 @@ class CalvinStatsmodelsPalm(CalvinPalm):
         return self.df, other_df
 
 
-    def standardize_columns(self, cols_to_exclude=None, group_col=None):
+    def standardize_columns(self, cols_to_exclude=[], group_col=None):
         """
         Standardizes the columns of the DataFrame except those listed to exclude.
 
         Parameters:
         - cols_to_exclude: list, columns not to standardize
         """
-        def _standardize_group(indices, cols_to_exclude, group_col=None):
+        def _standardize_group(indices, cols_to_exclude):
             for col in self.df.columns:
-                if col not in cols_to_exclude and col != group_col:
+                if col not in cols_to_exclude:
                     try:
+                        self.df.loc[indices, col] = pd.to_numeric(self.df.loc[indices, col])
                         self.df.loc[indices, col] = (self.df.loc[indices, col] - np.mean(self.df.loc[indices, col])) / np.std(self.df.loc[indices, col])
-                    except Exception:
-                        print(f'Unable to standardize column {col} for group {group_col}')
-                        
-        if cols_to_exclude is None:
-            cols_to_exclude = []
+                    except Exception as e:
+                        print(f'Unable to standardize column {col}.')
+            
         if group_col is not None:
-            unique_groups = self.df[group_col].unique()
-            for group in unique_groups:
+            cols_to_exclude.append(group_col) 
+            for group in self.df[group_col].unique():
                 group_indices = self.df[self.df[group_col] == group].index
-                _standardize_group(group_indices, cols_to_exclude, group_col)
+                _standardize_group(group_indices, cols_to_exclude)
         else:
             _standardize_group(self.df.index, cols_to_exclude)
         return self.df
