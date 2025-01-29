@@ -22,36 +22,38 @@ class ConvergentMapGenerator:
         self.mask_path = mask_path
         self.out_dir = out_dir
         self.weight = weight
+        if out_dir is not None: os.makedirs(out_dir, exist_ok=True)
         self._handle_nans()
         
     def _handle_nans(self):
-        drop_list = []
-        for key in self.corr_map_dict.keys():
-            if np.isnan(self.corr_map_dict[key]).all():
-                print(f"Warning: The correlation map for {key} contains only NaNs and will be excluded from the analysis.")
-                drop_list.append(key)
-            elif np.isnan(self.corr_map_dict[key]).any():
-                self.corr_map_dict[key] = np.nan_to_num(self.corr_map_dict[key], nan=0, posinf=1, neginf=-1)
-            else:
-                continue
-        
-        for key in drop_list:
-            del self.corr_map_dict[key]
+        print("Removing NaNS from self.coor_map_dict.")
+        for dataset, matrix in self.corr_map_dict.items():
+            self.corr_map_dict[dataset] = CorrelationCalculator._check_for_nans(matrix, nanpolicy='remove', verbose=False)
             
-    def generate_weighted_average_r_map(self):
-        r_maps = np.array(list(self.corr_map_dict.values()))
+    def generate_weighted_average_r_map(self, override_corr_map_dict=None):
+        if override_corr_map_dict is None:
+            local_corr_map_dict = self.corr_map_dict
+        else:
+            local_corr_map_dict = override_corr_map_dict
+        r_maps = np.array(list(local_corr_map_dict.values()))
+        
         if self.weight:
             weights = []
-            for dataset_name in self.corr_map_dict.keys():
+            for dataset_name in local_corr_map_dict.keys():
                 data = self.data_loader.load_dataset(dataset_name)
                 weights.append(data['niftis'].shape[0])
             weights = np.array(weights)
-            return np.average(r_maps, axis=0, weights=weights)
+            return np.mean(r_maps, axis=0, weights=weights)
         else:
             return np.mean(r_maps, axis=0)
 
-    def generate_agreement_map(self):
-        r_maps = np.array(list(self.corr_map_dict.values()))
+    def generate_agreement_map(self, override_corr_map_dict=None):
+        if override_corr_map_dict is None:
+            local_corr_map_dict = self.corr_map_dict
+        else:
+            local_corr_map_dict = override_corr_map_dict
+        
+        r_maps = np.array(list(local_corr_map_dict.values()))
         signs = np.sign(r_maps)
         agreement = np.all(signs == signs[0], axis=0)
         return agreement.astype(int)
@@ -91,19 +93,19 @@ class ConvergentMapGenerator:
         unmasked_map, mask_affine = self._unmask_array(map_data)
         img = nib.Nifti1Image(unmasked_map, affine=mask_affine)
         if self.out_dir is not None:
-            file_path = os.path.join(self.out_dir, 'convergence_map', file_name)
+            file_path = os.path.join(self.out_dir, file_name)
             nib.save(img, file_path)
         return img
 
     def _visualize_map(self, img, title):
         plotting.view_img(img, title=title).open_in_browser()
         
-    def generate_and_save_maps(self):
+    def generate_and_save_maps(self, verbose=False):
         # Generate weighted average r map
         weighted_avg_map = self.generate_weighted_average_r_map()
         try:
             weighted_avg_img = self._save_map(weighted_avg_map, 'weighted_average_r_map.nii.gz')
-            self._visualize_map(weighted_avg_img, 'Weighted Average R Map')
+            if verbose: self._visualize_map(weighted_avg_img, 'Weighted Average R Map')
         except:
             pass
 
@@ -111,15 +113,17 @@ class ConvergentMapGenerator:
         agreement_map = self.generate_agreement_map()
         try:
             agreement_img = self._save_map(agreement_map, 'agreement_map.nii.gz')
-            self._visualize_map(agreement_img, 'Agreement Map')
+            if verbose: self._visualize_map(agreement_img, 'Agreement Map')
         except:
             pass
     
-    def save_individual_r_maps(self):
+    def save_individual_r_maps(self, verbose=False):
         for dataset_name, r_map in self.corr_map_dict.items():
             r_img = self._save_map(r_map, f'{dataset_name}_correlation_map.nii.gz')
-            self._visualize_map(r_img, f'{dataset_name} Correlation Map')
+            if verbose: self._visualize_map(r_img, f'{dataset_name} Correlation Map')
 
+
+from math import log, exp, sqrt
 class LOOCVAnalyzer(ConvergentMapGenerator):
     def __init__(self, corr_map_dict, data_loader, mask_path=None, out_dir=None, weight=False, method='spearman', convergence_type='agreement', similarity='cos', n_bootstrap=1000, roi_path=None):
         """
@@ -159,6 +163,7 @@ class LOOCVAnalyzer(ConvergentMapGenerator):
         self.correlation_calculator = CorrelationCalculator(method=method)
         self.results = self.perform_loocv()
         self.results_df = self.results_to_dataframe()
+        self.results_df.to_csv(f'{out_dir}/loocv_results.csv')
     
     def results_to_dataframe(self):
         """
@@ -171,12 +176,11 @@ class LOOCVAnalyzer(ConvergentMapGenerator):
         """
         columns = ['Dataset', 'CI Lower', 'CI Upper', 'Mean R']
         data = []
-        for i, (ci_lower, ci_upper, mean_r) in enumerate(self.results):
-            try:
-                dataset_name = list(self.corr_map_dict.keys())[i]
-                data.append([dataset_name, ci_lower, ci_upper, mean_r])
-            except:
-                continue
+        dataset_names = list(self.corr_map_dict.keys())
+        for i, dataset_name in enumerate(dataset_names):
+            dataset_name
+            ci_lower, ci_upper, mean_r = self.results[i]
+            data.append([dataset_name, ci_lower, ci_upper, mean_r])
         return pd.DataFrame(data, columns=columns)
 
     def generate_convergent_roi(self):
@@ -207,24 +211,28 @@ class LOOCVAnalyzer(ConvergentMapGenerator):
             print("Evaluating dataset:", test_dataset_name)
             # Load the test dataset
             test_data = self.data_loader.load_dataset(test_dataset_name)
-            test_niftis = test_data['niftis']
-            test_indep_var = test_data['indep_var']
+            test_niftis = CorrelationCalculator._check_for_nans(test_data['niftis'], nanpolicy='remove', verbose=False)
+            test_indep_var = CorrelationCalculator._check_for_nans(test_data['indep_var'], nanpolicy='remove', verbose=False)
 
             # TRAIN - Generate the convergent map using the training datasets (or an ROI)
             if self.roi_path is not None:
                 convergent_map = self.generate_convergent_roi()
             elif self.convergence_type == 'average':
                 train_dataset_names = dataset_names[:i] + dataset_names[i+1:]
-                self.corr_map_dict = self.generate_correlation_maps(train_dataset_names)
-                convergent_map = self.generate_weighted_average_r_map()
+                local_corr_map_dict = self.generate_correlation_maps(train_dataset_names)
+                convergent_map = self.generate_weighted_average_r_map(local_corr_map_dict)
             elif self.convergence_type == 'agreement':
                 train_dataset_names = dataset_names[:i] + dataset_names[i+1:]
-                self.corr_map_dict = self.generate_correlation_maps(train_dataset_names)
-                convergent_map = self.generate_agreement_map()
+                local_corr_map_dict = self.generate_correlation_maps(train_dataset_names)
+                convergent_map = self.generate_agreement_map(local_corr_map_dict)
             else:
                 raise ValueError("Invalid convergence type (self.convergence_type). Please choose 'average', 'agreement', or set path to a region of interest to test (self.roi_path).")
 
             # TEST - use the convergent map on the test dataset
+            test_niftis = CorrelationCalculator._check_for_nans(test_niftis, nanpolicy='remove', verbose=False)
+            convergent_map = CorrelationCalculator._check_for_nans(convergent_map, nanpolicy='remove', verbose=False)
+            test_indep_var = CorrelationCalculator._check_for_nans(test_indep_var, nanpolicy='remove', verbose=False)
+            
             similarities = self.calculate_similarity(test_niftis, convergent_map)
             ci_lower, ci_upper, mean_r = self.correlate_similarity_with_outcomes(similarities, test_indep_var)
             results.append((ci_lower, ci_upper, mean_r))
@@ -267,6 +275,8 @@ class LOOCVAnalyzer(ConvergentMapGenerator):
         list of float
             List of cosine similarity values.
         """
+        patient_maps = CorrelationCalculator._check_for_nans(patient_maps, nanpolicy='remove', verbose=False)
+        
         if self.similarity == 'cos':
             similarities = [self.cosine_similarity(patient_map, convergent_map) for patient_map in patient_maps]
         elif self.similarity == 'spcorr':
@@ -297,6 +307,49 @@ class LOOCVAnalyzer(ConvergentMapGenerator):
         denominator = np.sqrt(np.sum(a**2)) * np.sqrt(np.sum(b**2))
         similarity = numerator / denominator
         return similarity
+
+    def _calculate_confidence_interval(self, data, ci_method='percentile', alpha=0.05):
+        """
+        Calculate confidence intervals (CI) for a given distribution.
+        
+        Parameters:
+            data (array-like): Input distribution of data.
+            ci_method (str): Method to calculate CI. Options are 'analytic' or 'percentile'.
+            alpha (float): Significance level for the CI (default is 0.05 for a 95% CI).
+        
+        Returns:
+            tuple: (CI lower bound, CI upper bound, Mean)
+        """        
+        # Calculate the mean
+        mean = np.mean(data)
+        if ci_method == 'analytic':
+            # Use the analytic method (normal approximation)
+            z = 1.96  # For 95% CI
+            std_err = np.std(data, ddof=1) / np.sqrt(len(data))  # Standard error of the mean
+            ci_lower = mean - z * std_err
+            ci_upper = mean + z * std_err
+        
+        elif ci_method == 'percentile':
+            # Use the percentile method
+            ci_lower = np.percentile(data, 100 * (alpha / 2))
+            ci_upper = np.percentile(data, 100 * (1 - alpha / 2))
+        elif ci_method == 'hybrid':
+            ci_lower_1 = np.percentile(data, 100 * (alpha / 2))
+            ci_upper_1 = np.percentile(data, 100 * (1 - alpha / 2))
+            
+            # Use the analytic method (normal approximation)
+            z = 1.96  # For 95% CI
+            std_err = np.std(data, ddof=1) / np.sqrt(len(data))  # Standard error of the mean
+            ci_lower_2 = mean - z * std_err
+            ci_upper_2 = mean + z * std_err
+            
+            ci_lower = ( ci_lower_1 + ci_lower_2 ) / 2
+            ci_upper = ( ci_upper_1 + ci_upper_2 ) / 2
+            
+        else:
+            raise ValueError("ci_method must be 'analytic' or 'percentile'")
+        
+        return ci_lower, ci_upper, mean
     
     def correlate_similarity_with_outcomes(self, similarities, indep_var):
         """
@@ -324,11 +377,79 @@ class LOOCVAnalyzer(ConvergentMapGenerator):
                 resampled_r.append(spearmanr(resampled_similarities.flatten(), resampled_indep_var.flatten())[0])
             else:
                 resampled_r.append(pearsonr(resampled_similarities.flatten(), resampled_indep_var.flatten())[0])
-                
-        ci_lower = np.percentile(resampled_r, 2.5)
-        ci_upper = np.percentile(resampled_r, 97.5)
-        mean_r = np.mean(resampled_r)
+        
+        ci_lower, ci_upper, mean_r = self._calculate_confidence_interval(resampled_r)
         return ci_lower, ci_upper, mean_r
+    
+    def compute_fixed_effects_by_group(self, group_dict):
+        """
+        Perform an inverse-variance fixed-effect meta-analysis of mean R-values by group.
+
+        Parameters
+        ----------
+        group_dict : dict
+            Dictionary mapping each dataset_name -> group_name, e.g.:
+            {
+            'dataset_1': 'group1',
+            'dataset_2': 'group2',
+            'dataset_3': 'group1'
+            }
+
+        Returns
+        -------
+        pd.DataFrame
+            DataFrame with columns ['Group', 'R_Fixed', 'CI_Lower', 'CI_Upper'],
+            where each row represents the meta-analytic fixed-effect of R
+            among all datasets in that group.
+        """
+
+        def fisher_z(r):
+            return 0.5 * log((1 + r) / (1 - r))
+
+        def inv_fisher_z(z):
+            return (exp(2*z) - 1) / (exp(2*z) + 1)
+
+        # 1. Gather mean R and sample sizes by group
+        #    (We assume self.results lines up with self.corr_map_dict.keys())
+        grouped_z_and_w = {}
+        for (dataset_name, (_, _, mean_r)) in zip(self.corr_map_dict.keys(), self.results):
+            group = group_dict.get(dataset_name)
+            if group is None:
+                continue  # Skip datasets not in the dictionary
+
+            # Convert mean R to Fisher's Z
+            z = fisher_z(mean_r)
+
+            # Sample size (for variance of Fisher's Z)
+            n = len(self.data_loader.load_dataset(dataset_name)['indep_var'])
+            w = n - 3  # weight = inverse variance = (n-3)
+
+            grouped_z_and_w.setdefault(group, []).append((z, w))
+
+        # 2. Perform meta-analysis for each group
+        rows = []
+        for group, z_w_pairs in grouped_z_and_w.items():
+            # Weighted average in Z-space
+            sum_w = sum(w for _, w in z_w_pairs)
+            z_fixed = sum(z * w for z, w in z_w_pairs) / sum_w
+
+            # Variance and standard error
+            var_fixed = 1.0 / sum_w
+            se_fixed = sqrt(var_fixed)
+
+            # 95% CI in Z-space
+            z_lower, z_upper = z_fixed - 1.96 * se_fixed, z_fixed + 1.96 * se_fixed
+
+            # Back-transform to correlation
+            r_fixed = inv_fisher_z(z_fixed)
+            r_lower = inv_fisher_z(z_lower)
+            r_upper = inv_fisher_z(z_upper)
+
+            rows.append([group, r_lower, r_upper, r_fixed])
+
+        # 3. Return a one-row-per-group DataFrame
+        return pd.DataFrame(rows, columns=['Dataset', 'CI Lower', 'CI Upper', 'Mean R'])
+
 
 class CorrelationAnalysis:
     """
@@ -375,11 +496,13 @@ class CorrelationAnalysis:
         Calculates uncorrected pairwise p-values.
     calculate_pairwise_p_values(method='two_tail', max_stat=False):
         Calculates pairwise p-values, with an option for maximum statistic correction.
+    datasets_to_flip: 
+        list of dataset names. if detected, will flip multiply correlation map by -1.
     run():
         Runs the entire correlation analysis process and returns the p-value and pairwise p-values.
     """
     
-    def __init__(self, data_dict_path, method='pearson', n_permutations=1000, out_dir=None, use_jax=False):
+    def __init__(self, data_dict_path, method='pearson', n_permutations=1000, out_dir=None, use_jax=False, datasets_to_flip=[]):
         self.data_dict_path = data_dict_path
         self.method = method
         self.n_permutations = n_permutations
@@ -389,12 +512,25 @@ class CorrelationAnalysis:
         self.original_similarity_matrix = None
         self.permuted_similarity_tensor = None
         self.use_jax = use_jax
-
-    def generate_correlation_maps(self):
+        self.datasets_to_flip = datasets_to_flip
+        self.correlation_calculator = CorrelationCalculator(method=self.method, verbose=False, use_jax=self.use_jax)
         self.data_loader = DataLoader(self.data_dict_path)
-        correlation_calculator = CorrelationCalculator(method=self.method, verbose=False)
-        
-        self.corr_map_dict = correlation_calculator.process_all_datasets(self.data_loader.dataset_paths_dict)
+
+    def generate_correlation_maps(self, permute=False):
+        corr_map_dict = {}
+        for dataset_name in self.data_loader.dataset_paths_dict.keys():
+            if self.method == 'pearson':
+                data = self.data_loader.load_dataset(dataset_name)
+            elif self.method =='spearman':
+                data = self.data_loader.load_dataset(dataset_name, nifti_type='niftis_ranked')
+            
+            if permute: np.random.shuffle(data['indep_var'])  # permute the independent variable
+            
+            self.correlation_calculator._process_data(data)
+            if dataset_name in self.datasets_to_flip:
+                self.correlation_calculator.correlation_map *= -1
+            corr_map_dict[dataset_name] = self.correlation_calculator.correlation_map
+        return corr_map_dict
 
     def calculate_similarity_matrix(self, corr_map_dict):
         dataset_names = list(corr_map_dict.keys())
@@ -403,72 +539,40 @@ class CorrelationAnalysis:
         
         for i in range(n):
             for j in range(i, n):
-                t0 = time.time()
                 mx_1 = corr_map_dict[dataset_names[i]].flatten()
                 mx_2 = corr_map_dict[dataset_names[j]].flatten()
-                t1 = time.time()
-                print('time to flatten ', t1-t0)
-                if self.method == 'pearson':
-                    if self.use_jax: similarity = _calculate_pearson_r_map_jax(mx_1, mx_2)
-                    else: similarity, _ = pearsonr(mx_1, mx_2)
-                elif self.method == 'spearman':
-                    # ranked1 = rankdata(mx_1)
-                    # ranked2 = rankdata(mx_2)
-                    # similarity, _ = pearsonr(ranked1, ranked2)
 
+                mx_1 = self.correlation_calculator._check_for_nans(mx_1, nanpolicy='remove', verbose=False)
+                mx_2 = self.correlation_calculator._check_for_nans(mx_2, nanpolicy='remove', verbose=False)
+
+                # if self.method == 'pearson' and self.spcorr_method == 'pearson':
                     # if self.use_jax:
-                    t2 = time.time()
-                    mx_1 = _rankdata_jax(mx_1[:, np.newaxis])
-                    t3 = time.time()
-                    mx_2 = _rankdata_jax(mx_2[:, np.newaxis])
-                    t4 = time.time()
-                    similarity = _calculate_pearson_r_map_jax(mx_1, mx_2)[0][0]
-                    t5 = time.time()
-                    print(f't2-t1 {t2-t1}')
-                    print(f't3-t2 {t3-t2}')
-                    print(f't4-t3 {t4-t3}')
-                    print(f't5-t4 {t5-t3}')
-                    # else: similarity, _ = spearmanr(mx_1, mx_2)
-                # CorrelationCalculator._check_for_nans(similarity, nanpolicy='stop')
-                similarity_matrix[i,j] = similarity
-                similarity_matrix[j,i] = similarity
-
-                if j==0:
-                    print(f"Time for spearmanr: {t2-t1}")
-                    print(corr_map_dict[dataset_names[i]])
-                    print(corr_map_dict[dataset_names[i]])
-                    print(mx_1.shape)
-                    print(mx_2.shape)
-                    t3 = time.time()
-                    r,p=spearmanr(mx_1,mx_2)
-                    t4 = time.time()
-                    print(f"SECOND RUN OF SPEARMANR ON THE SAME DATA; {t4-t3}")
+                    #     similarity = _calculate_pearson_r_map_jax(mx_1, mx_2)[0][0]
+                    # else:
+                        # similarity, _ = pearsonr(mx_1, mx_2) 
+                # elif self.method == 'spearman':
+                #     if self.use_jax:
+                #         mx_1 = _rankdata_jax(mx_1[:, np.newaxis])
+                #         mx_2 = _rankdata_jax(mx_2[:, np.newaxis])
+                #         similarity = _calculate_pearson_r_map_jax(mx_1, mx_2)[0][0]
+                #     else:
+                #         similarity, _ = spearmanr(mx_1, mx_2)
+                similarity, _ = pearsonr(mx_1, mx_2) 
+                similarity_matrix[i, j] = similarity
+                similarity_matrix[j, i] = similarity
 
         return similarity_matrix
 
-    def permute_and_recompose(self):
-        permuted_corr_map_dict = {}
-        for dataset_name in self.data_loader.dataset_paths_dict.keys():
-            data = self.data_loader.load_dataset(dataset_name)
-            np.random.shuffle(data['indep_var'])  # permute
-            correlation_calculator = CorrelationCalculator(method=self.method, verbose=False)
-            correlation_calculator._process_data(data)
-            permuted_corr_map_dict[dataset_name] = correlation_calculator.correlation_map
-        return permuted_corr_map_dict
-
-    def calculate_permuted_similarity_matrix(self, permuted_corr_map_dict):
-        return self.calculate_similarity_matrix(permuted_corr_map_dict)
-
     def repeat_permutation_process(self):
-        self.generate_correlation_maps()
+        self.corr_map_dict = self.generate_correlation_maps(permute=False)
         self.original_similarity_matrix = self.calculate_similarity_matrix(self.corr_map_dict)
         
         n = len(self.corr_map_dict)
         self.permuted_similarity_tensor = np.zeros((self.n_permutations, n, n))
         
         for i in tqdm(range(self.n_permutations), desc='Running permutations'):
-            permuted_corr_map_dict = self.permute_and_recompose()
-            permuted_similarity_matrix = self.calculate_permuted_similarity_matrix(permuted_corr_map_dict)
+            permuted_corr_map_dict = self.generate_correlation_maps(permute=True)
+            permuted_similarity_matrix = self.calculate_similarity_matrix(permuted_corr_map_dict)
             self.permuted_similarity_tensor[i] = permuted_similarity_matrix
 
     def save_results(self):
@@ -547,26 +651,69 @@ class CorrelationAnalysis:
         print(f"Overall p-value: {p_value}")
         return p_value, pairwise_p_values
     
-    def matrix_heatmap(self, similarity_matrix, type='similarity', mask_half=False, rm_trace=True, output_path=None):
-        # Clean up the matrix
-        if mask_half: 
+    def matrix_heatmap(self, similarity_matrix, type='similarity', mask_half=False, output_path=None, limit=None):
+        # Possibly mask the upper half
+        if mask_half:
             similarity_matrix = np.tril(similarity_matrix)
-        if rm_trace:
-            np.fill_diagonal(similarity_matrix, np.nan)
+
+        # Optionally replace diagonal
+        np.fill_diagonal(similarity_matrix, np.nan)
+        
         if type == 'similarity':
-            cmap = LinearSegmentedColormap.from_list('RedBlackGreen', ['red', 'black', 'green'])
-            norm = TwoSlopeNorm(vmin=np.nanmin(similarity_matrix), vcenter=0, vmax=np.nanmax(similarity_matrix))
-            output_file = 'similarity_heatmap.svg'
+            # 1) Define a colormap with positions in [0..1]
+            #    (0.0 → red, 0.4 → black, 0.6 → black, 1.0 → green)
+            cmap = LinearSegmentedColormap.from_list(
+                'RedBlackGreen',
+                [
+                    (0, 'red'),   
+                    (0.5, 'black'),
+                    (0.5, 'black'),
+                    (1.0, 'green')
+                ]
+            )
+
+            # 2) Dynamically set vmin & vmax from data, keep center at 0
+            if limit is None:
+                minimum = np.nanmin(np.abs(similarity_matrix))
+                maximum = np.nanmax(np.abs(similarity_matrix))
+                limit = np.max(np.array([minimum, maximum]))
+                
+            norm = TwoSlopeNorm(
+                vmin= -limit,
+                vcenter=0,
+                vmax= limit
+            )
+            if bool(os.path.splitext(output_path)[1]):
+                output_path = os.path.dirname(output_path)
+                output_file = os.path.basename(output_path)
+            else:
+                output_file = 'similarity_heatmap.svg'
+
         elif type == 'pvals':
+            # p-value colormap example
+            import matplotlib.cm as cm
             bounds = [0, 0.0001, 0.001, 0.01, 0.05, 1]
             cmap = cm.get_cmap('viridis', len(bounds) - 1)
             norm = cm.colors.BoundaryNorm(bounds, cmap.N)
             output_file = 'pvals_heatmap.svg'
+
         else:
             raise ValueError("Invalid input. Please choose either 'similarity' or 'pvals'.")
 
+        # If you really want the diagonal = 1 afterward:
+        np.fill_diagonal(similarity_matrix, 1)
+
         fig, ax = plt.subplots(figsize=(8, 6))
-        sns.heatmap(similarity_matrix, square=True, linewidths=1.0, cmap=cmap, norm=norm, ax=ax, cbar=True)
+        sns.heatmap(
+            similarity_matrix,
+            square=True,
+            linewidths=1.0,
+            cmap=cmap,
+            norm=norm,
+            ax=ax,
+            cbar=True
+        )
+
         ax.set_xticks(np.arange(len(self.corr_map_dict)) + 0.5)
         ax.set_yticks(np.arange(len(self.corr_map_dict)) + 0.5)
         ax.set_xticklabels(list(self.corr_map_dict.keys()), rotation=90)
@@ -575,3 +722,4 @@ class CorrelationAnalysis:
         if output_path:
             plt.savefig(os.path.join(output_path, output_file))
         plt.show()
+        return limit

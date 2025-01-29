@@ -521,7 +521,8 @@ class CalvinFWEMap():
         preview = view_and_save_nifti(matrix=nifti_df,
                             out_dir=out_dir,
                             output_name=name,
-                            silent=silent)
+                            silent=silent,
+                            ref_file=self.mask_path)
         return preview
         
     def save_results(self, voxelwise_results, unmasked_p_values, voxelwise_results_fwe):

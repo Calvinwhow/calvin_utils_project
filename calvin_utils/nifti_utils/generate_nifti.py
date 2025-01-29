@@ -1,19 +1,15 @@
-import numpy as np
-from nilearn import image
-from nimlab import datasets as nimds
-import warnings
-warnings.filterwarnings('ignore')
-import pandas as pd
-from glob import glob
-from calvin_utils.file_utils.import_matrices import import_matrices_from_folder
-from nimlab import datasets as nimds
-from nilearn import image, plotting
-import nibabel as nib
 import os
-import nibabel as nib
-from nilearn.image import resample_to_img
-from nilearn import image
 import re
+import warnings
+import numpy as np
+import pandas as pd
+import nibabel as nib
+from nilearn import image, plotting
+from nilearn.image import resample_to_img
+from calvin_utils.file_utils.import_matrices import import_matrices_from_folder
+
+warnings.filterwarnings('ignore')
+
 
 def nifti_from_matrix(matrix, output_file, ref_file=None, use_reference=True, reference='MNI', use_affine=False, affine='MNI', output_name=None, silent=False):
     """Converts a flattened matrix to a NIfTI file using the given affine matrix.
@@ -42,7 +38,11 @@ def nifti_from_matrix(matrix, output_file, ref_file=None, use_reference=True, re
         img = image.new_img_like(output_file, matrix, affine)
     elif use_reference:
         if reference == 'MNI':
-            mask = nimds.get_img("mni_icbm152")
+            try:
+                from nimlab import datasets as nimds
+                mask = nimds.get_img("mni_icbm152")
+            except Exception as e:
+                raise ValueError(f"Error {e}. Resolve by specifying mask or installing nimlab: https://github.com/nimlab/documentation.git")
             ref_img = mask.get_fdata()
             matrix = matrix.reshape(ref_img.shape)
         else:
@@ -149,9 +149,13 @@ def generate_eccentric_spherical_roi(subject, x, y, z, out_dir, radius=5, eccent
     return save_path
 
 
-def generate_spherical_roi(x, y, z, out_dir=rf'/Users/cu135/Dropbox (Partners HealthCare)/memory/functional_networks/seeds/spherical_seeds/misc/', radius=5):
+def generate_spherical_roi(x, y, z, out_dir=rf'', radius=5):
     sphere_roi = gen_sphere_roi(xcoord=x, ycoord=y, zcoord=z, mask=False, thresh_mx=None, radius=radius);
-    mask = nimds.get_img("mni_icbm152")
+    try:
+        from nimlab import datasets as nimds
+        mask = nimds.get_img("mni_icbm152")
+    except Exception as e:
+        raise ValueError(f"Error {e}. Resolve by specifying mask or installing nimlab: https://github.com/nimlab/documentation.git")
     ovr_img3 = image.new_img_like(mask, sphere_roi)
     #Save
     if os.path.isdir(out_dir)==False:
@@ -244,12 +248,11 @@ def add_matrices_together(folder):
     summed_matrix = matrices_df.sum(axis=1)
     return summed_matrix
 
-def view_and_save_nifti(matrix, out_dir, output_name=None, silent=False):
-    img = nifti_from_matrix(matrix, output_file=out_dir, output_name=output_name, silent=silent)
+def view_and_save_nifti(matrix, out_dir, output_name=None, silent=False, ref_file=None):
+    img = nifti_from_matrix(matrix, output_file=out_dir, output_name=output_name, silent=silent, ref_file=ref_file)
     if silent:
         return None
     else:
-        # mask = nimds.get_img("mni_icbm152")
         ovr_html1 = plotting.view_img(img, cut_coords=(0,0,0), black_bg=False, opacity=.75, cmap='ocean_hot')
         return ovr_html1
 

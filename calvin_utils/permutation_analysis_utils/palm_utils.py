@@ -2,33 +2,13 @@ from __future__ import print_function
 import pandas as pd
 import numpy as np
 import patsy
-import re
 import os
-import io
-import os
-import shutil
-import os.path
 from time import time
 import subprocess
 import getpass
-from termcolor import cprint
-import nibabel as nib
 from nilearn import image
-import pandas as pd
 from IPython.core.getipython import get_ipython
-try:
-    from pathlib import Path
-except:
-    from pathlib2 import Path
-import pandas as pd
-import os
-import subprocess
-import numpy as np
-import patsy
 from calvin_utils.file_utils.dataframe_utilities import preprocess_colnames_for_regression
-from nilearn import image
-import nibabel as nib
-import numpy as np
 
 class CalvinPalm:
     """

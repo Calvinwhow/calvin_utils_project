@@ -1,21 +1,8 @@
 ## Paths Input Here
-from nimlab import datasets as nimds
-from matplotlib import pyplot as plt
 import warnings
 warnings.filterwarnings('ignore')
 import os 
-def paths_to_input_files(path_1=None, path_2=None, analysis_name=None):
-    analysis = "default_analysis"
-
-    out_dir = os.path.join(os.path.dirname(path_1), f'{analysis}')
-    if os.path.isdir(out_dir) != True:
-        os.makedirs(out_dir)
-    print('I will save to:', out_dir)
-    return path_1, path_2, out_dir
-
 import re
-import os
-import json
 import numpy as np
 import pandas as pd
 import nibabel as nib
@@ -23,11 +10,6 @@ from glob import glob
 from tqdm import tqdm
 from nilearn import image
 from calvin_utils.nifti_utils.generate_nifti import view_and_save_nifti
-import shutil
-import tensorly as tl
-from tensorly.regression import CPRegressor
-import statsmodels.api as sm
-
 
 class GiiNiiFileImport:
     """
@@ -309,6 +291,10 @@ class GiiNiiFileImport:
         Simple masking function.
         """
         if mask_path is None:
+            try:
+                from nimlab import datasets as nimds
+            except Exception as e:
+                raise ValueError(f"Error: {e}. \n Resolve by specifying a mask or installing Nimlab at https://github.com/nimlab/documentation.git")
             mask = nimds.get_img("mni_icbm152")
         else:
             mask = nib.load(mask_path)
@@ -325,7 +311,10 @@ class GiiNiiFileImport:
         Simple unmasking function.
         """
         if mask_path is None:
-            mask = nimds.get_img("mni_icbm152")
+            try:
+                from nimlab import datasets as nimds
+            except Exception as e:
+                raise ValueError(f"Error: {e}. \n Resolve by specifying a mask or installing Nimlab at https://github.com/nimlab/documentation.git")
         else:
             mask = nib.load(mask_path)
         mask = mask.get_fdata().flatten()

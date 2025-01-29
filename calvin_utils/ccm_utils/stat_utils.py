@@ -9,7 +9,7 @@ from calvin_utils.ccm_utils.npy_utils import DataLoader
 from calvin_utils.ccm_utils.stat_utils_jax import _rankdata_jax, calculate_spearman_r_map_jax, _calculate_pearson_r_map_jax
 
 class CorrelationCalculator:
-    def __init__(self, method='pearson', verbose=False, use_jax=True):
+    def __init__(self, method='pearson', verbose=False, use_jax=False):
         self.method = method
         self.verbose = verbose
         self.use_jax = use_jax
@@ -31,7 +31,6 @@ class CorrelationCalculator:
                     print(f"Indices of Infs: {inf_indices}")
                     for index in inf_indices:
                         print(f"Inf at index: {index}, value: {array[tuple(index)]}")
-                
             if nanpolicy=='remove':
                 max_val = np.nanmax(array)
                 min_val = np.nanmin(array)
@@ -42,7 +41,7 @@ class CorrelationCalculator:
                 raise ValueError("The array contains NaNs.")
             else:
                 raise ValueError("Selected nanpolicy does not exist. choose 'stop' | 'permit' | 'remove' ")
-            return array
+        return array
             
     def _rankdata(self, array, vectorize=True):
         """Vectorized ranking function using NumPy. Handles ties sloppily."""
@@ -66,9 +65,9 @@ class CorrelationCalculator:
         if self.use_jax:
             return calculate_spearman_r_map_jax(niftis, indep_var)
         
-        ranked_niftis = self._rankdata(niftis, vectorize=True)
+        # self.ranked_niftis = self._rankdata(niftis, vectorize=True) # TODO--ONLY RANK THE NIFTIS THE FIRST TIME. THEN, STORE THE RANK AND USE IT IN FUTURE! ?OVERWRITE THE ORIGINAL NIFTI DATA W/ RANKS
         ranked_indep_var = rankdata(indep_var)[:, np.newaxis]
-        rho = self._calculate_pearson_r_map(ranked_niftis, ranked_indep_var)
+        rho = self._calculate_pearson_r_map(niftis, ranked_indep_var)
         return rho
 
     def _calculate_pearson_r_map(self, niftis, indep_var):
@@ -106,14 +105,17 @@ class CorrelationCalculator:
             self.correlation_map = self._calculate_pearson_r_map(data['niftis'], data['indep_var'])
         elif self.method == 'spearman':
             self.correlation_map = self._calculate_spearman_r_map(data['niftis'], data['indep_var'])
-
-    def process_all_datasets(self, data_dict):
-        correlation_maps = {}
-        for dataset_name in data_dict.keys():
-            data = DataLoader.load_dataset_static(data_dict, dataset_name)
-            self._process_data(data)
-            correlation_maps[dataset_name] = self.correlation_map
-        return correlation_maps
+        return self.correlation_map
+    
+    def generate_correlation_maps(self, data_loader):
+        corr_map_dict = {}
+        for dataset_name in data_loader.dataset_paths_dict.keys():
+            if self.method == 'pearson':
+                data = data_loader.load_dataset(dataset_name)
+            elif self.method =='spearman':
+                data = data_loader.load_dataset(dataset_name, nifti_type='niftis_ranked')            
+            corr_map_dict[dataset_name] = self._process_data(data)
+        return corr_map_dict
 
 class MetaConvergenceForestPlot:
     """
@@ -158,18 +160,18 @@ class MetaConvergenceForestPlot:
             # Append the additional rows to the data DataFrame
             self.data = pd.concat([self.data, additional_rows], ignore_index=True)
 
-    def create_and_display_forest_plot(self, x_label="Mean R"):
+    def create_and_display_forest_plot(self, x_label="Mean R", estimate="Mean R", varlabel="Dataset", ll="CI Lower", hl="CI Upper"):
         """
         Generate and display a forest plot from the meta-convergence data using forestplot.py.
         """
         # Generate the forest plot
         ax = fp.forestplot(dataframe=self.data,
                 # Necessary inputs
-                estimate="Mean R",  # Column containing estimated effect size 
-                varlabel="Dataset",  # Column containing variable label
+                estimate=estimate,  # Column containing estimated effect size 
+                varlabel=varlabel,  # Column containing variable label
                 
                 # Additional Plotting Inputs
-                ll="CI Lower", hl="CI Upper",  # Columns containing conf. int. lower and higher limits
+                ll=ll, hl=hl,  # Columns containing conf. int. lower and higher limits
                 
                 # Axis Labels
                 xlabel=x_label,

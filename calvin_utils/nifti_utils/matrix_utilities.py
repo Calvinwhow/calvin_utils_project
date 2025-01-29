@@ -4,7 +4,6 @@ import scipy.stats as st
 from scipy.stats import zscore
 from scipy.stats import t, norm
 from nilearn import image, plotting 
-from nimlab import datasets as nimds
 from nibabel.affines import apply_affine
 
 import numpy as np
@@ -392,8 +391,12 @@ def mask_matrix(df_1, mask_path=None, mask_threshold=0.2, mask_by='rows'):
     
     #Get Mask
     if mask_path is None:
-        mni_mask = nimds.get_img("mni_icbm152")
-        mask_data = mni_mask.get_fdata().flatten()
+        try:
+            from nimlab import datasets as nimds
+            mask = nimds.get_img("mni_icbm152")
+        except Exception as e:
+            raise ValueError(f"Error {e}. Resolve by specifying mask or installing nimlab: https://github.com/nimlab/documentation.git")
+        mask_data = mask.get_fdata().flatten()
         brain_indices = np.where(mask_data > 0)[0]
     else:
         mask = image.load_img(mask_path)
@@ -430,8 +433,12 @@ def apply_mask_to_dataframe(merged_df, mask_path=None):
     if mask_path is not None:
         brain_indices = np.where(image.load_img(mask_path).get_fdata().flatten() > 0)[0]
     else:
-        mni_mask = nimds.get_img("mni_icbm152")
-        mask_data = mni_mask.get_fdata().flatten()
+        try:
+            from nimlab import datasets as nimds
+            mask = nimds.get_img("mni_icbm152")
+        except Exception as e:
+            raise ValueError(f"Error {e}. Resolve by specifying mask or installing nimlab: https://github.com/nimlab/documentation.git")
+        mask_data = mask.get_fdata().flatten()
         brain_indices = np.where(mask_data > 0)[0]
     
     # Apply the mask to the dataframe
@@ -462,8 +469,12 @@ def mask_matrix(df_1, mask_path=None, mask_threshold=0.2, mask_by='rows', datafr
     else:
         # Get Mask
         if mask_path is None:
-            mni_mask = nimds.get_img("mni_icbm152")
-            mask_data = mni_mask.get_fdata().flatten()
+            try:
+                from nimlab import datasets as nimds
+                mask = nimds.get_img("mni_icbm152")
+            except Exception as e:
+                raise ValueError(f"Error {e}. Resolve by specifying mask or installing nimlab: https://github.com/nimlab/documentation.git")
+            mask_data = mask.get_fdata().flatten()
             brain_indices = np.where(mask_data > 0)[0]
         else:
             mask = image.load_img(mask_path)
@@ -513,7 +524,11 @@ def unmask_matrix(df_1, mask_path=None, mask_threshold=0.2, unmask_by='rows', da
     else:
         # Get Mask
         if mask_path is None:
-            mask = nimds.get_img("mni_icbm152")
+            try:
+                from nimlab import datasets as nimds
+                mask = nimds.get_img("mni_icbm152")
+            except Exception as e:
+                raise ValueError(f"Error {e}. Resolve by specifying mask or installing nimlab: https://github.com/nimlab/documentation.git")
             mask_data = mask.get_fdata().flatten()
             brain_indices = np.where(mask_data > 0)[0]
         else:

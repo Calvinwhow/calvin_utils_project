@@ -1,17 +1,16 @@
-from calvin_utils.file_utils.import_functions import GiiNiiFileImport
 import os
-import pandas as pd
-import numpy as np
-import shutil
 import json
+import shutil
+import numpy as np
+import pandas as pd
 from tqdm import tqdm
 import tensorly as tl
-from tensorly.decomposition import CP
-from tensorly.regression.cp_regression import CPRegressor
 import statsmodels.api as sm
+from tensorly.regression.cp_regression import CPRegressor
+from calvin_utils.file_utils.import_functions import GiiNiiFileImport
 
 class DatasetNiftiImporter(GiiNiiFileImport):
-    def __init__(self, df, dataset_col, nifti_col, indep_var_col, covariate_cols, out_dir, mask_path=None, regression_method='tensor'):
+    def __init__(self, df, dataset_col, nifti_col, indep_var_col, covariate_cols, out_dir, mask_path=None, regression_method='tensor', data_transform_method='standardize'):
         self.df = df
         self.dataset_col = dataset_col
         self.nifti_col = nifti_col
@@ -21,6 +20,7 @@ class DatasetNiftiImporter(GiiNiiFileImport):
         self.mask_path = mask_path
         self.data_dict = {}
         self.regression_method = regression_method
+        self.data_transform_method = data_transform_method
         self._prepare_data_dict()
         self._create_dataset_dict()
         
@@ -75,8 +75,6 @@ class DatasetNiftiImporter(GiiNiiFileImport):
         intercept = np.ones((covariates_arr.shape[0], 1)) # shape (samples, 1)
         return np.hstack((intercept, covariates_arr)) # shape (samples, N_covariates + 1)
     
-    
-    
     def _tensor_regression(self, endog, exog):
         # Ensure endog and exog are tensors
         endog = tl.tensor(endog)
@@ -95,7 +93,7 @@ class DatasetNiftiImporter(GiiNiiFileImport):
         std_arr = (arr - mean) / std
         return std_arr
     
-    def _run_transform(self, niftis_arr, indep_var_arr, covariates_arr, method='standardize'):
+    def _run_transform(self, niftis_arr, indep_var_arr, covariates_arr):
         """
         Apply a specified transformation to the input arrays.
     
@@ -107,8 +105,6 @@ class DatasetNiftiImporter(GiiNiiFileImport):
             Array of independent variables (samples, 1).
         covariates_arr : np.array
             Array of covariates (samples, N_covariates).
-        method : str
-            Transformation method to apply. Options are 'standardize'.
     
         Returns:
         --------
@@ -119,14 +115,16 @@ class DatasetNiftiImporter(GiiNiiFileImport):
         std_covariates_arr : np.array
             Transformed covariates.
         """
-        if method == 'standardize':
-            std_niftis_arr = self._standardize(niftis_arr)
-            std_indep_var_arr = self._standardize(indep_var_arr)
-            std_covariates_arr = self._standardize(covariates_arr)
+        if self.data_transform_method == 'standardize':
+            niftis_arr = self._standardize(niftis_arr)
+            indep_var_arr = self._standardize(indep_var_arr)
+            covariates_arr = self._standardize(covariates_arr)
+        elif self.data_transform_method is None: 
+            pass
         else:
-            raise ValueError("Invalid transformation method. Choose 'standardize'.")
-    
-        return std_niftis_arr, std_indep_var_arr, std_covariates_arr
+            raise ValueError("Invalid transformation method. Choose 'standardize' or None.")
+
+        return niftis_arr, indep_var_arr, covariates_arr
     
     def _handle_nans(self, *arrs, value=0):
         "handles NaNs, setting posinf and neginf to max in-array values."
@@ -180,7 +178,7 @@ class DatasetNiftiImporter(GiiNiiFileImport):
         covariates_arr = self._add_intercept(covariates_arr)                # shape (samples, N_covariates+1)
         
         masked_niftis_arr, indep_var_arr, covariates_arr = self._handle_nans(masked_niftis_arr, indep_var_arr, covariates_arr) 
-        masked_niftis_arr, indep_var_arr, covariates_arr = self._run_transform(masked_niftis_arr, indep_var_arr, covariates_arr, method='standardize') 
+        masked_niftis_arr, indep_var_arr, covariates_arr = self._run_transform(masked_niftis_arr, indep_var_arr, covariates_arr) 
         nifti_residuals, indep_residuals = self._run_regression(masked_niftis_arr, indep_var_arr, covariates_arr)
 
         self._save_residuals(dataset_dir, nifti_residuals, indep_residuals, covariates_arr)
