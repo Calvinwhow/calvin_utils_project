@@ -35,6 +35,7 @@ class ConvergentMapGenerator:
             local_corr_map_dict = self.corr_map_dict
         else:
             local_corr_map_dict = override_corr_map_dict
+            
         r_maps = np.array(list(local_corr_map_dict.values()))
         
         if self.weight:
@@ -47,16 +48,23 @@ class ConvergentMapGenerator:
         else:
             return np.mean(r_maps, axis=0)
 
-    def generate_agreement_map(self, override_corr_map_dict=None):
+    def generate_agreement_map(self, override_corr_map_dict=None, return_signed=True):
+        '''
+        Generates mask of regions that share signs among all maps. 
+        If return signed, map will range from [-1,0,1]
+        zeroes do not factor into cosine simlarity against the agreement map given the nature of the dot product.
+        '''
         if override_corr_map_dict is None:
             local_corr_map_dict = self.corr_map_dict
         else:
             local_corr_map_dict = override_corr_map_dict
-        
         r_maps = np.array(list(local_corr_map_dict.values()))
         signs = np.sign(r_maps)
         agreement = np.all(signs == signs[0], axis=0)
-        return agreement.astype(int)
+        if return_signed:                            # Returns -1, 0, or 1 based on agreement
+            return agreement.astype(int) * signs[0] 
+        else:                                        # Returns only 0 or 1
+            return agreement.astype(int)  
     
     def _load_nifti(self, path):
         img = nib.load(path)
@@ -92,47 +100,95 @@ class ConvergentMapGenerator:
     def _save_map(self, map_data, file_name):
         unmasked_map, mask_affine = self._unmask_array(map_data)
         img = nib.Nifti1Image(unmasked_map, affine=mask_affine)
+        
+        file_path = os.path.join(self.out_dir, file_name)
         if self.out_dir is not None:
-            file_path = os.path.join(self.out_dir, file_name)
+            if bool(os.path.splitext(file_path)[1]):
+                os.makedirs(os.path.dirname(file_path), exist_ok=True)
+            else: 
+                os.makedirs(self.out_dir, exist_ok=True)
             nib.save(img, file_path)
+            
         return img
 
     def _visualize_map(self, img, title):
         plotting.view_img(img, title=title).open_in_browser()
-        
-    def generate_and_save_maps(self, verbose=False):
-        # Generate weighted average r map
-        weighted_avg_map = self.generate_weighted_average_r_map()
-        try:
-            weighted_avg_img = self._save_map(weighted_avg_map, 'weighted_average_r_map.nii.gz')
-            if verbose: self._visualize_map(weighted_avg_img, 'Weighted Average R Map')
-        except:
-            pass
-
-        # Generate agreement map
-        agreement_map = self.generate_agreement_map()
-        try:
-            agreement_img = self._save_map(agreement_map, 'agreement_map.nii.gz')
-            if verbose: self._visualize_map(agreement_img, 'Agreement Map')
-        except:
-            pass
     
-    def save_individual_r_maps(self, verbose=False):
+    def _align_signs(self, images_dict):
+        """
+        Align the signs of all brain images in `images_dict` so that the average
+        pairwise Pearson's R is (roughly) maximized by flipping signs where needed.
+        
+        images_dict: dict[str, np.ndarray]
+            Keys are dataset names, values are the corresponding brain images.
+        
+        Returns
+        -------
+        aligned_dict : dict[str, np.ndarray]
+            A copy of `images_dict` with some values possibly flipped (multiplied by -1).
+        """
+        keys = list(images_dict.keys())
+        # Flatten each image to 1D for correlation
+        flattened = [images_dict[k].ravel() for k in keys]
+        
+        # 1) Build a reference by summing all flattened images
+        reference = np.sum(flattened, axis=0)
+        
+        # 2) Flip sign of each image if it negatively correlates with the reference
+        aligned_dict = {}
+        for idx, k in enumerate(keys):
+            r_val = np.corrcoef(flattened[idx], reference)[0, 1]
+            if r_val < 0:
+                aligned_dict[k] = -images_dict[k]
+            else:
+                aligned_dict[k] = images_dict[k]
+
+        return aligned_dict
+
+
+    def generate_and_save_maps(self, verbose=False, group_dict={}, dir='', align_all_maps=True):
+        if group_dict == {}:
+            group_dict = {ds: 'all_datasets' for ds in self.corr_map_dict.keys()}
+            
+        for group in set(group_dict.values()):
+            print(group)
+            # get the datasets that belong to the group you are working on
+            datasets_in_group = [key for key, val in group_dict.items() if val == group]
+            local_corr_map_dict = {dataset: self.corr_map_dict[dataset] for dataset in datasets_in_group}
+            
+            # if align maps, set them all so they have the same sign spatial correlation
+            if align_all_maps: local_corr_map_dict = self._align_signs(local_corr_map_dict)
+            
+            # Generate weighted average r map
+            weighted_avg_map = self.generate_weighted_average_r_map(local_corr_map_dict)
+            weighted_avg_img = self._save_map(weighted_avg_map, f'{dir}{group}_weighted_average_r_map.nii.gz')
+            try:
+                if verbose: self._visualize_map(weighted_avg_img, f'{group} Weighted Average R Map')
+            except: pass
+
+            # Generate agreement map
+            agreement_map = self.generate_agreement_map(local_corr_map_dict)
+            agreement_img = self._save_map(agreement_map, f'{dir}{group}_agreement_map.nii.gz')
+            try:
+                if verbose: self._visualize_map(agreement_img, f'{group} Agreement Map')
+            except: pass
+    
+    def save_individual_r_maps(self, verbose=False, dir=''):
         for dataset_name, r_map in self.corr_map_dict.items():
-            r_img = self._save_map(r_map, f'{dataset_name}_correlation_map.nii.gz')
+            r_img = self._save_map(r_map, f'{dir}{dataset_name}_correlation_map.nii.gz')
             if verbose: self._visualize_map(r_img, f'{dataset_name} Correlation Map')
 
 
 from math import log, exp, sqrt
 class LOOCVAnalyzer(ConvergentMapGenerator):
-    def __init__(self, corr_map_dict, data_loader, mask_path=None, out_dir=None, weight=False, method='spearman', convergence_type='agreement', similarity='cos', n_bootstrap=1000, roi_path=None):
+    def __init__(self, corr_map_dict, data_loader, mask_path=None, out_dir=None, weight=False, method='spearman', convergence_type='agreement', similarity='cos', n_bootstrap=1000, roi_path=None, group_dict={}):
         """
         Initialize the LOOCVAnalyzer.
 
         Parameters:
         -----------
         corr_map_dict : dict
-            Dictionary containing correlation maps for each dataset.
+            corr_map_dict
         data_loader : DataLoader
             Instance of DataLoader to load datasets.
         mask_path : str, optional
@@ -153,6 +209,10 @@ class LOOCVAnalyzer(ConvergentMapGenerator):
         roi_path : str, optional
             Path to ROI file to use in place of convergent map. 
             Cosine similarity is best to use with this choice.
+        group_dict : dict, optional
+            a dictionary with dataset names as keys and their group as values.
+            If entered, matching groups will be used to create their group-level convergent map
+            Then one group-level convergent map will predict the other group-level convergent map. 
         """
         super().__init__(corr_map_dict, data_loader, mask_path, out_dir, weight)
         self.method = method
@@ -160,10 +220,14 @@ class LOOCVAnalyzer(ConvergentMapGenerator):
         self.similarity = similarity
         self.convergence_type = convergence_type
         self.roi_path = roi_path
-        self.correlation_calculator = CorrelationCalculator(method=method)
+        self.group_dict = group_dict
+        self.out_dir=out_dir
+        self.correlation_calculator = CorrelationCalculator(method=method, verbose=False, use_jax=False)
+         
+    def run(self):
         self.results = self.perform_loocv()
         self.results_df = self.results_to_dataframe()
-        self.results_df.to_csv(f'{out_dir}/loocv_results.csv')
+        self.results_df.to_csv(f'{self.out_dir}/loocv_results.csv')
     
     def results_to_dataframe(self):
         """
@@ -196,6 +260,22 @@ class LOOCVAnalyzer(ConvergentMapGenerator):
         roi_data = self._mask_array(roi_data)
         return roi_data
 
+    def _prepare_train_dataset(self, i, dataset_names_list, test_dataset_name):
+        if self.group_dict == {}:                                       # If empty, have all groups predict test data
+            return dataset_names_list[:i] + dataset_names_list[i+1:]    # Return groups that aren't the test group
+        
+        taining_dataset_list = []
+        test_group = self.group_dict.get(test_dataset_name)             # If full, have opposite group predict test data
+        for k,v in self.group_dict.items():
+            if v != test_group: 
+                taining_dataset_list.append(k)                          # Aggregates all opposite group dataset names
+            
+            if len(set(self.group_dict.values)) > 2:                         # Unclear how to handle the case where there are multiple groups
+                raise ValueError("Over 2 groups have been assigned in the group_dict argument. This is not yet supported.")
+            if len(set(self.group_dict.values)) ==1:                         # Not possible
+                raise ValueError("Only 1 group has been assigned in the group_dict argument. This is not supported.")
+        return taining_dataset_list
+
     def perform_loocv(self):
         """
         Perform Leave-One-Out Cross-Validation (LOOCV) analysis.
@@ -208,7 +288,10 @@ class LOOCVAnalyzer(ConvergentMapGenerator):
         results = []
         dataset_names = list(self.corr_map_dict.keys())
         for i, test_dataset_name in enumerate(dataset_names):
+            # Load the training dataset
             print("Evaluating dataset:", test_dataset_name)
+            train_dataset_names = self._prepare_train_dataset(i, dataset_names, test_dataset_name)            
+            
             # Load the test dataset
             test_data = self.data_loader.load_dataset(test_dataset_name)
             test_niftis = CorrelationCalculator._check_for_nans(test_data['niftis'], nanpolicy='remove', verbose=False)
@@ -218,11 +301,9 @@ class LOOCVAnalyzer(ConvergentMapGenerator):
             if self.roi_path is not None:
                 convergent_map = self.generate_convergent_roi()
             elif self.convergence_type == 'average':
-                train_dataset_names = dataset_names[:i] + dataset_names[i+1:]
                 local_corr_map_dict = self.generate_correlation_maps(train_dataset_names)
                 convergent_map = self.generate_weighted_average_r_map(local_corr_map_dict)
             elif self.convergence_type == 'agreement':
-                train_dataset_names = dataset_names[:i] + dataset_names[i+1:]
                 local_corr_map_dict = self.generate_correlation_maps(train_dataset_names)
                 convergent_map = self.generate_agreement_map(local_corr_map_dict)
             else:
@@ -234,7 +315,7 @@ class LOOCVAnalyzer(ConvergentMapGenerator):
             test_indep_var = CorrelationCalculator._check_for_nans(test_indep_var, nanpolicy='remove', verbose=False)
             
             similarities = self.calculate_similarity(test_niftis, convergent_map)
-            ci_lower, ci_upper, mean_r = self.correlate_similarity_with_outcomes(similarities, test_indep_var)
+            ci_lower, ci_upper, mean_r = self.correlate_similarity_with_outcomes(similarities, test_indep_var, test_dataset_name)
             results.append((ci_lower, ci_upper, mean_r))
         return results
 
@@ -280,7 +361,7 @@ class LOOCVAnalyzer(ConvergentMapGenerator):
         if self.similarity == 'cos':
             similarities = [self.cosine_similarity(patient_map, convergent_map) for patient_map in patient_maps]
         elif self.similarity == 'spcorr':
-            similarities = [pearsonr(patient_map, convergent_map)[0] for patient_map in patient_maps]
+            similarities = [pearsonr(patient_map.flatten(), convergent_map.flatten())[0] for patient_map in patient_maps]
         else:
             raise ValueError("Invalid similarity measure (self.similarity). Please choose 'cos' or 'spcorr'.")
         return similarities
@@ -308,7 +389,7 @@ class LOOCVAnalyzer(ConvergentMapGenerator):
         similarity = numerator / denominator
         return similarity
 
-    def _calculate_confidence_interval(self, data, ci_method='percentile', alpha=0.05):
+    def _calculate_confidence_interval(self, data, ci_method='percentile', alpha=0.05, return_mean=False):
         """
         Calculate confidence intervals (CI) for a given distribution.
         
@@ -348,10 +429,47 @@ class LOOCVAnalyzer(ConvergentMapGenerator):
             
         else:
             raise ValueError("ci_method must be 'analytic' or 'percentile'")
+        if return_mean:
+            return ci_lower, ci_upper, mean
+        else:
+            return ci_lower, ci_upper, data[0]
+
+    def _generate_scatterplot(self, similarities, indep_var, dataset_name):
+        """
+        Generate and save a scatterplot of similarity vs. outcome with Spearman correlation.
+
+        Parameters:
+        -----------
+        similarities : list of float
+            List of cosine similarity values (X-axis).
+        indep_var : np.array
+            Array of independent variable values (Y-axis).
+        dataset_name : str
+            Name of the dataset (used for title and filename).
+        """
+        rho, p = spearmanr(similarities, indep_var)
+        r, pr = pearsonr(similarities, indep_var)
+
+        # Create scatterplot
+        plt.figure(figsize=(6, 4))
+        df = pd.DataFrame({"Similarity": similarities, "Outcome": indep_var})
+        if self.similarity=='cos':
+            xlab = 'Cosine Similarity'
+        else:
+            xlab = 'Spatial Correlation'
+        sns.scatterplot(data=df, x="Similarity", y="Outcome")
         
-        return ci_lower, ci_upper, mean
-    
-    def correlate_similarity_with_outcomes(self, similarities, indep_var):
+        # Title with rho, p-value, and dataset name
+        plt.title(f"{dataset_name}: Spearman ρ = {rho:.2f}, p = {p:.2e} \n Pearson r = {r:.2f}, p = {pr:.2e}")
+        plt.xlabel("Similarity")
+        plt.ylabel("Outcome")
+
+        # Save plot
+        os.makedirs(self.out_dir+'/scatterplots', exist_ok=True)
+        plt.savefig(os.path.join(self.out_dir, f"scatterplots/{dataset_name}_scatterplot.svg"), bbox_inches="tight")
+        plt.close()
+        
+    def correlate_similarity_with_outcomes(self, similarities, indep_var, dataset_name='test_data', gen_scatterplot=True):
         """
         Correlate similarity values with independent variables and calculate confidence intervals.
 
@@ -368,10 +486,17 @@ class LOOCVAnalyzer(ConvergentMapGenerator):
             R-value, lower confidence interval, and upper confidence interval.
         """
         resampled_r = []
+        if gen_scatterplot:
+            self._generate_scatterplot(similarities, indep_var.flatten(), dataset_name)
+            
         for _ in tqdm(range(self.n_bootstrap), 'Running bootstraps'):
             resampled_indices = np.random.choice(len(similarities), len(similarities), replace=True)
-            resampled_similarities = np.array(similarities)[resampled_indices]
-            resampled_indep_var = np.array(indep_var)[resampled_indices]
+            if _ == 0:      # on the first iteration, store the actual data
+                resampled_similarities = np.array(similarities)
+                resampled_indep_var = np.array(indep_var)
+            else:
+                resampled_similarities = np.array(similarities)[resampled_indices]
+                resampled_indep_var = np.array(indep_var)[resampled_indices]
             
             if self.method == 'spearman':
                 resampled_r.append(spearmanr(resampled_similarities.flatten(), resampled_indep_var.flatten())[0])
@@ -408,6 +533,15 @@ class LOOCVAnalyzer(ConvergentMapGenerator):
 
         def inv_fisher_z(z):
             return (exp(2*z) - 1) / (exp(2*z) + 1)
+
+        def prep_group_dict(group_dict):
+            if group_dict == {}:
+                for dataset in self.corr_map_dict.keys():
+                    group_dict[dataset] = 'Overall Fixed Effects'
+            return group_dict
+        
+        # 0. Prepare the dict mapping datasets to fixed effects groups
+        group_dict = prep_group_dict(group_dict)
 
         # 1. Gather mean R and sample sizes by group
         #    (We assume self.results lines up with self.corr_map_dict.keys())
@@ -581,9 +715,31 @@ class CorrelationAnalysis:
             np.save(f'{self.out_dir}/original_similarity_matrix.npy', self.original_similarity_matrix)
             np.save(f'{self.out_dir}/permuted_similarity_tensor.npy', self.permuted_similarity_tensor)
 
-    def calculate_p_value(self, method='two_tail'):
-        observed_avg = np.nanmean(self.original_similarity_matrix)
-        permuted_avg = np.nanmean(self.permuted_similarity_tensor, axis=(1, 2))
+    def calculate_p_value(self, method='two_tail', absolute_similarity=True):
+        """
+        method : str
+            if true, will take the absolute value of the average similarity before computing. 
+        absolute_similarity : bool
+            if true, will take the absolute value of the similarity matrices before computing.
+            This tests if the topology was similar.
+            If false, will test if there was a significant similarity, considering signs. 
+        """
+        # Remove the diagonal from the comparison
+        diag_mask = ~np.eye(self.original_similarity_matrix.shape[0], dtype=bool)  # False on diagonal, True elsewhere
+        local_obsv = self.original_similarity_matrix * diag_mask 
+        local_perm = self.permuted_similarity_tensor * diag_mask  # Apply across all permutations
+        
+        # check the absolute correlation.
+        if absolute_similarity:
+            local_obsv = np.abs(local_obsv)
+            local_perm = np.abs(local_perm)
+        
+        # get averages
+        observed_avg = np.nanmean(local_obsv)
+        permuted_avg = np.nanmean(local_perm, axis=(1, 2))
+        print(observed_avg, permuted_avg)
+
+        # Get p values
         if method == 'two_tail':
             p_value = np.mean(np.abs(permuted_avg) > np.abs(observed_avg))
         elif method == 'one_tail':
@@ -684,10 +840,10 @@ class CorrelationAnalysis:
                 vmax= limit
             )
             if bool(os.path.splitext(output_path)[1]):
-                output_path = os.path.dirname(output_path)
                 output_file = os.path.basename(output_path)
+                output_path = os.path.dirname(output_path)
             else:
-                output_file = 'similarity_heatmap.svg'
+                output_file = 'heatmap_similarity.svg'
 
         elif type == 'pvals':
             # p-value colormap example
@@ -695,7 +851,7 @@ class CorrelationAnalysis:
             bounds = [0, 0.0001, 0.001, 0.01, 0.05, 1]
             cmap = cm.get_cmap('viridis', len(bounds) - 1)
             norm = cm.colors.BoundaryNorm(bounds, cmap.N)
-            output_file = 'pvals_heatmap.svg'
+            output_file = 'heatmap_pvals.svg'
 
         else:
             raise ValueError("Invalid input. Please choose either 'similarity' or 'pvals'.")

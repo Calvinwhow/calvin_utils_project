@@ -38,7 +38,7 @@ class DataLoader:
         }
         return data_dict
     
-    def _rank_niftis(self, arr, vectorize=False):
+    def _rank_niftis(self, arr, vectorize=True):
         """
         Rank a 2D array (voxels, samples) ignoring ties.
         This is a 'sloppy' approach: ties get consecutive ranks arbitrarily.

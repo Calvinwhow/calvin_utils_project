@@ -11,7 +11,7 @@ from calvin_utils.file_utils.import_matrices import import_matrices_from_folder
 warnings.filterwarnings('ignore')
 
 
-def nifti_from_matrix(matrix, output_file, ref_file=None, use_reference=True, reference='MNI', use_affine=False, affine='MNI', output_name=None, silent=False):
+def nifti_from_matrix(matrix, output_file, ref_file=None, use_reference=True, use_affine=False, affine='MNI', output_name=None, silent=False):
     """Converts a flattened matrix to a NIfTI file using the given affine matrix.
 
     Args:
@@ -37,21 +37,18 @@ def nifti_from_matrix(matrix, output_file, ref_file=None, use_reference=True, re
           # Create a new image from the array and the affine matrix
         img = image.new_img_like(output_file, matrix, affine)
     elif use_reference:
-        if reference == 'MNI':
+        if ref_file is None:
             try:
                 from nimlab import datasets as nimds
-                mask = nimds.get_img("mni_icbm152")
+                ref_img = nimds.get_img("mni_icbm152")
             except Exception as e:
                 raise ValueError(f"Error {e}. Resolve by specifying mask or installing nimlab: https://github.com/nimlab/documentation.git")
-            ref_img = mask.get_fdata()
-            matrix = matrix.reshape(ref_img.shape)
         else:
             ref_img = image.load_img(ref_file)
-            ref_img_data = ref_img.get_fdata()
-            mask = np.where(ref_img > 0, 1, 0) #Quick-and-dirty mask-generation assuming T1 image. 
-            matrix = matrix.reshape(ref_img_data.shape)
+        ref_img_data = ref_img.get_fdata()
+        matrix = matrix.reshape(ref_img_data.shape)
         # Create a new image from the array and the affine matrix
-        img = image.new_img_like(ref_niimg=mask, data=matrix)
+        img = image.new_img_like(ref_niimg=ref_img, data=matrix)
 
     #Make directories
     if os.path.exists(output_file):

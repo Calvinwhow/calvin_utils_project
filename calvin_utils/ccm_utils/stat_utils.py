@@ -201,10 +201,11 @@ class MetaConvergenceForestPlot:
         Method to save the forest plot.
         """
         # Save the plot as PNG and SVG
+        os.makedirs(self.out_dir+'/forest_plots', exist_ok=True)
+            
         if self.out_dir:
-            os.makedirs(self.out_dir, exist_ok=True)
-            self.fig.savefig(os.path.join(self.out_dir, f"{title}.png"), bbox_inches='tight')
-            self.fig.savefig(os.path.join(self.out_dir, f"{title}.svg"), bbox_inches='tight')
+            self.fig.savefig(os.path.join(self.out_dir, f"forest_plots/{title}.png"), bbox_inches='tight')
+            self.fig.savefig(os.path.join(self.out_dir, f"forest_plots/{title}.svg"), bbox_inches='tight')
             print(f'Saved to {self.out_dir} as {title}.svg and .png')
             
     def run(self):
