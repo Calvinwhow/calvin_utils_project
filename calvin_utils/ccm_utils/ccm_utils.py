@@ -146,18 +146,19 @@ class ConvergentMapGenerator:
         return aligned_dict
 
 
-    def generate_and_save_maps(self, verbose=False, group_dict={}, dir='', align_all_maps=True):
+    def generate_and_save_maps(self, verbose=False, group_dict={}, dir='', align_all_maps=False):
         if group_dict == {}:
             group_dict = {ds: 'all_datasets' for ds in self.corr_map_dict.keys()}
+            align_all_maps = True
             
         for group in set(group_dict.values()):
-            print(group)
             # get the datasets that belong to the group you are working on
             datasets_in_group = [key for key, val in group_dict.items() if val == group]
             local_corr_map_dict = {dataset: self.corr_map_dict[dataset] for dataset in datasets_in_group}
             
             # if align maps, set them all so they have the same sign spatial correlation
-            if align_all_maps: local_corr_map_dict = self._align_signs(local_corr_map_dict)
+            if align_all_maps: 
+                local_corr_map_dict = self._align_signs(local_corr_map_dict)
             
             # Generate weighted average r map
             weighted_avg_map = self.generate_weighted_average_r_map(local_corr_map_dict)
@@ -181,7 +182,7 @@ class ConvergentMapGenerator:
 
 from math import log, exp, sqrt
 class LOOCVAnalyzer(ConvergentMapGenerator):
-    def __init__(self, corr_map_dict, data_loader, mask_path=None, out_dir=None, weight=False, method='spearman', convergence_type='agreement', similarity='cos', n_bootstrap=1000, roi_path=None, group_dict={}):
+    def __init__(self, corr_map_dict, data_loader, mask_path=None, out_dir=None, weight=False, method='spearman', convergence_type='agreement', similarity='cos', n_bootstrap=1000, roi_path=None, group_dict={}, datasets_to_flip = []):
         """
         Initialize the LOOCVAnalyzer.
 
@@ -213,6 +214,9 @@ class LOOCVAnalyzer(ConvergentMapGenerator):
             a dictionary with dataset names as keys and their group as values.
             If entered, matching groups will be used to create their group-level convergent map
             Then one group-level convergent map will predict the other group-level convergent map. 
+        datasets_to_flip : list, optional
+            A list of keys corresponding to datasets which should have their correlation maps multiplied by -1. 
+            This is typically performed to align maps to enable testing of topology, controlling for sign. 
         """
         super().__init__(corr_map_dict, data_loader, mask_path, out_dir, weight)
         self.method = method
@@ -222,6 +226,7 @@ class LOOCVAnalyzer(ConvergentMapGenerator):
         self.roi_path = roi_path
         self.group_dict = group_dict
         self.out_dir=out_dir
+        self.datasets_to_flip = datasets_to_flip
         self.correlation_calculator = CorrelationCalculator(method=method, verbose=False, use_jax=False)
          
     def run(self):
@@ -296,6 +301,11 @@ class LOOCVAnalyzer(ConvergentMapGenerator):
             test_data = self.data_loader.load_dataset(test_dataset_name)
             test_niftis = CorrelationCalculator._check_for_nans(test_data['niftis'], nanpolicy='remove', verbose=False)
             test_indep_var = CorrelationCalculator._check_for_nans(test_data['indep_var'], nanpolicy='remove', verbose=False)
+            
+            # Orient Dataset to Account for Sign Flips
+            if test_dataset_name in self.datasets_to_flip:
+                print(f'flipping: {test_dataset_name}')
+                test_indep_var = test_indep_var * -1
 
             # TRAIN - Generate the convergent map using the training datasets (or an ROI)
             if self.roi_path is not None:
@@ -450,18 +460,17 @@ class LOOCVAnalyzer(ConvergentMapGenerator):
         rho, p = spearmanr(similarities, indep_var)
         r, pr = pearsonr(similarities, indep_var)
 
-        # Create scatterplot
-        plt.figure(figsize=(6, 4))
+        # Create DataFrame for Seaborn
         df = pd.DataFrame({"Similarity": similarities, "Outcome": indep_var})
-        if self.similarity=='cos':
-            xlab = 'Cosine Similarity'
-        else:
-            xlab = 'Spatial Correlation'
-        sns.scatterplot(data=df, x="Similarity", y="Outcome")
-        
+        xlab = 'Cosine Similarity' if self.similarity == 'cos' else 'Spatial Correlation'
+
+        # Create LM plot
+        plt.figure(figsize=(6, 4))
+        sns.lmplot(data=df, x="Similarity", y="Outcome", height=4, aspect=1.5, scatter_kws={'alpha': 0.5})
+
         # Title with rho, p-value, and dataset name
         plt.title(f"{dataset_name}: Spearman ρ = {rho:.2f}, p = {p:.2e} \n Pearson r = {r:.2f}, p = {pr:.2e}")
-        plt.xlabel("Similarity")
+        plt.xlabel(xlab)
         plt.ylabel("Outcome")
 
         # Save plot
@@ -647,7 +656,7 @@ class CorrelationAnalysis:
         self.permuted_similarity_tensor = None
         self.use_jax = use_jax
         self.datasets_to_flip = datasets_to_flip
-        self.correlation_calculator = CorrelationCalculator(method=self.method, verbose=False, use_jax=self.use_jax)
+        self.correlation_calculator = CorrelationCalculator(method=method, verbose=False, use_jax=self.use_jax)
         self.data_loader = DataLoader(self.data_dict_path)
 
     def generate_correlation_maps(self, permute=False):
@@ -737,7 +746,6 @@ class CorrelationAnalysis:
         # get averages
         observed_avg = np.nanmean(local_obsv)
         permuted_avg = np.nanmean(local_perm, axis=(1, 2))
-        print(observed_avg, permuted_avg)
 
         # Get p values
         if method == 'two_tail':
@@ -746,8 +754,9 @@ class CorrelationAnalysis:
             p_value = np.mean(permuted_avg > observed_avg)
         else:
             raise ValueError('Invalid method. Please choose either "one_tail" or "two_tail".')
+        print(f"The observed average similarity is: {observed_avg}")
         print(f'The {method} p-value is: {p_value}. This is the proportion of permuted averages that are greater than the observed average.')
-        return p_value
+        return p_value, observed_avg
 
     def calculate_max_stat_p_values(self, method):
         n = self.original_similarity_matrix.shape[0]
@@ -799,12 +808,13 @@ class CorrelationAnalysis:
         else:
             raise ValueError('Invalid method. Please choose either "one_tail" or "two_tail".')
         
-        p_value = self.calculate_p_value(tails)
+        p_value, observed_avg = self.calculate_p_value(tails)
         pairwise_p_values = self.calculate_pairwise_p_values(tails, fwe)
         if verbose:
             print('Similarity Matrix: ')
             print(self.original_similarity_matrix)
         print(f"Overall p-value: {p_value}")
+        self.p_value = p_value; self.observed_average = observed_avg
         return p_value, pairwise_p_values
     
     def matrix_heatmap(self, similarity_matrix, type='similarity', mask_half=False, output_path=None, limit=None):
@@ -876,6 +886,6 @@ class CorrelationAnalysis:
         ax.set_yticklabels(list(self.corr_map_dict.keys()), rotation=0)
 
         if output_path:
-            plt.savefig(os.path.join(output_path, output_file))
+            plt.savefig(os.path.join(output_path, f'similarity-{self.observed_average}_p-{self.p_value}_{output_file}'))
         plt.show()
         return limit

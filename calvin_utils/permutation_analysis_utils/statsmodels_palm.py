@@ -22,28 +22,78 @@ class CalvinStatsmodelsPalm(CalvinPalm):
         data_df = super().read_data()
         return data_df
     
-    def define_design_matrix(self, formula, data_df, voxelwise_variable=None):
-        """
-        Defines the design matrix based on the patsy formula and returns it as a DataFrame.
+    # def define_design_matrix(self, formula, data_df, voxelwise_dv=False, voxelwise_variable=None, coerce_str=False):
+    #     """
+    #     Defines the design matrix based on the patsy formula and returns it as a DataFrame.
         
+    #     Parameters:
+    #     - formula: str, the patsy formula to construct the design matrix
+    #     - data_df: DataFrame, the data frame from which to construct the design matrix
+    #     - voxelwise_variablre: str, the column in data_df with paths to the voxelwise regressor files (niftis)
+        
+    #     Returns:
+    #     - Tuple containing the design matrix for the dependent variable and the design matrix for the independent variables.
+    #     """
+
+    #     if voxelwise_variable is not None:
+    #         vars = patsy.ModelDesc.from_formula(formula)
+    #         vars.rhs_termlist.remove(patsy.Term([patsy.EvalFactor(voxelwise_variable)]))
+    #         y, X = patsy.dmatrices(vars, data_df, return_type='dataframe')
+    #         X[voxelwise_variable] = data_df[voxelwise_variable]
+    #     else:
+    #         y, X = patsy.dmatrices(formula, data_df, return_type='dataframe')
+    #     if y.shape[1] == 2:         # remove second column in binomial case
+    #         y = y.iloc[:,[0]]
+    #     return y, X
+    def define_design_matrix(self, formula, data_df, voxelwise_variable_list=None, coerce_str=False):
+        """
+        Defines the design matrix while ensuring voxelwise variables are not expanded into dummies.
+
         Parameters:
         - formula: str, the patsy formula to construct the design matrix
-        - data_df: DataFrame, the data frame from which to construct the design matrix
-        - voxelwise_variablre: str, the column in data_df with paths to the voxelwise regressor files (niftis)
-        
+        - data_df: DataFrame, the data frame containing all variables
+        - voxelwise_variable: str, variable that should not be expanded by patsy (voxelwise regressor)
+        - coerce_str: bool, whether to coerce categorical strings to integer values
+
         Returns:
-        - Tuple containing the design matrix for the dependent variable and the design matrix for the independent variables.
+        - y: DataFrame, dependent variable matrix
+        - X: DataFrame, independent variable matrix
         """
-        if voxelwise_variable is not None:
-            vars = patsy.ModelDesc.from_formula(formula)
-            vars.rhs_termlist.remove(patsy.Term([patsy.EvalFactor(voxelwise_variable)]))
-            y, X = patsy.dmatrices(vars, data_df, return_type='dataframe')
-            X[voxelwise_variable] = data_df[voxelwise_variable]
+
+        # 1. Convert categorical strings to integer codes **before** patsy processes them
+        if coerce_str:
+            categorical_mappings = {}
+            for col in data_df.columns:
+                if col not in voxelwise_variable_list:
+                    data_df[col], unique = pd.factorize(data_df[col])
+
+        # 2. Remove voxelwise variable from the formula before patsy processes it
+        if voxelwise_variable_list is not None:
+            vars_desc = patsy.ModelDesc.from_formula(formula)
+            
+            # Handle covariates
+            for var in voxelwise_variable_list:
+                vars_desc.rhs_termlist = [
+                    term for term in vars_desc.rhs_termlist
+                    if var not in [str(factor) for factor in term.factors]
+                ]
+                
+            y, X = patsy.dmatrices(vars_desc, data_df, return_type='dataframe')
+
+            for var in voxelwise_variable_list:
+                if var in formula.split('~')[1]:
+                    X[var] = data_df[var]
+                if var in formula.split('~')[0]:
+                    y = data_df.loc[:, [var]]
         else:
             y, X = patsy.dmatrices(formula, data_df, return_type='dataframe')
-        if y.shape[1] == 2:         # remove second column in binomial case
-            y = y.iloc[:,[0]]
+        
+        if y.shape[1] == 2:  # Remove second column in binomial case
+            y = y.iloc[:, [0]]
+
         return y, X
+
+
 
     def drop_nans_from_columns(self, columns_to_drop_from=None):
         """

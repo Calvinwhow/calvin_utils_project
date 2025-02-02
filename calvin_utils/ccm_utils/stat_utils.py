@@ -4,15 +4,23 @@ import pandas as pd
 import forestplot as fp
 from jax import jit
 import jax.numpy as jnp
-from scipy.stats import rankdata
+from tqdm import tqdm
+from scipy.stats import rankdata, spearmanr
 from calvin_utils.ccm_utils.npy_utils import DataLoader
 from calvin_utils.ccm_utils.stat_utils_jax import _rankdata_jax, calculate_spearman_r_map_jax, _calculate_pearson_r_map_jax
 
 class CorrelationCalculator:
-    def __init__(self, method='pearson', verbose=False, use_jax=False):
+    def __init__(self, method='pearson', verbose=False, use_jax=False, datasets_to_flip = []):
+        '''
+        Params
+        datasets_to_flip : list, optional
+            A list of keys corresponding to datasets which should have their correlation maps multiplied by -1. 
+            This is typically performed to align maps to enable testing of topology, controlling for sign. 
+        '''
         self.method = method
         self.verbose = verbose
         self.use_jax = use_jax
+        self.datasets_to_flip = datasets_to_flip
 
     @staticmethod
     def _check_for_nans(array, nanpolicy='remove', verbose=False):
@@ -59,6 +67,58 @@ class CorrelationCalculator:
             ranks = np.apply_along_axis(rankdata, 0, array) 
         return ranks                                        #returns the rank matrix, not the sorted data. 
 
+    def _calculate_spearman_r_scipy_map(self, niftis, indep_var):
+        """
+        Runs the voxelwise Spearman R, which has a cleaner distribution than the vectorized version.
+        Used for figure-grade maps, and for smaller analysis. Unsuited for permutations. 
+        """
+        X = indep_var
+        Y = niftis
+        RHO = np.zeros((1,Y.shape[1]))
+        for i in tqdm(range(Y.shape[1]), desc='Voxelwise Spearman'):
+            RHO[0, i], _ = spearmanr(X[:], Y[:,i])
+        return RHO
+
+    def efficient_rankdata(self, arr, axis=0):
+        """
+        Efficiently rank data using numpy.
+        
+        Args:
+            arr (np.ndarray): Array to be ranked.
+            axis (int): Axis along which to rank the data.
+        
+        Returns:
+            np.ndarray: Ranked data.
+        """
+        arr = np.asarray(arr)
+        ranks = np.empty_like(arr, dtype=float)
+        if axis == 0:
+            sorter = np.argsort(arr, axis=axis)
+            ranks[sorter, np.arange(arr.shape[1])] = np.arange(arr.shape[0])[:, np.newaxis] + 1
+        else:
+            sorter = np.argsort(arr, axis=axis)
+            ranks[np.arange(arr.shape[0])[:, np.newaxis], sorter] = np.arange(arr.shape[1]) + 1
+        return ranks
+
+    # Rank the data
+    def _calculate_spearman_manual(self, X, Y):
+        X_ranked = self.efficient_rankdata(X, axis=0)
+        Y_ranked = self.efficient_rankdata(Y, axis=0)
+
+        if X_ranked.shape[0] != Y_ranked.shape[0]:
+            raise ValueError(f"The number of rows in X ({X_ranked.shape}) must match the number of rows in Y ({Y_ranked.shape}).")
+
+        # Calculate differences in ranks
+        D = np.square(X_ranked - Y_ranked)
+
+        # Sum the squared differences across patients
+        SIGMA_D = np.sum(D, axis=0)
+
+        # Calculate Spearman correlation
+        N = X_ranked.shape[0]
+        RHO = 1 - ( (6 * SIGMA_D) / (N * (N**2 - 1)) )
+        return RHO
+
     def _calculate_spearman_r_map(self, niftis, indep_var):
         """Calculate the Spearman rank-order correlation coefficient for each voxel in a fully vectorized manner."""
         # Rank the data using scipy.stats.rankdata to handle ties
@@ -99,22 +159,33 @@ class CorrelationCalculator:
         return r
 
     def _process_data(self, data):
-        self._check_for_nans(data['niftis'])
-        self._check_for_nans(data['indep_var'])
+        data['niftis'] = self._check_for_nans(data['niftis'])
+        data['indep_var'] = self._check_for_nans(data['indep_var'])
         if self.method == 'pearson':
             self.correlation_map = self._calculate_pearson_r_map(data['niftis'], data['indep_var'])
         elif self.method == 'spearman':
             self.correlation_map = self._calculate_spearman_r_map(data['niftis'], data['indep_var'])
+        elif self.method == 'spearman_scipy':
+            self.correlation_map = self._calculate_spearman_r_scipy_map(data['niftis'], data['indep_var'])
+        elif self.method == 'spearman_manual':
+            self.correlation_map = self._calculate_spearman_manual(data['niftis'], data['indep_var'])
         return self.correlation_map
     
     def generate_correlation_maps(self, data_loader):
         corr_map_dict = {}
         for dataset_name in data_loader.dataset_paths_dict.keys():
+            print(f"Evaluating {dataset_name}")
             if self.method == 'pearson':
                 data = data_loader.load_dataset(dataset_name)
             elif self.method =='spearman':
-                data = data_loader.load_dataset(dataset_name, nifti_type='niftis_ranked')            
+                data = data_loader.load_dataset(dataset_name, nifti_type='niftis_ranked') 
+            else:
+                data = data_loader.load_dataset(dataset_name) 
             corr_map_dict[dataset_name] = self._process_data(data)
+            
+            if dataset_name in self.datasets_to_flip:           # manually flip dataset correlation for topology test
+                print('flipping')
+                corr_map_dict[dataset_name] = corr_map_dict[dataset_name] * -1
         return corr_map_dict
 
 class MetaConvergenceForestPlot:

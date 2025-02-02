@@ -63,27 +63,30 @@ class OverlapMap:
         self.data_loader = data_loader
         self.mask_path = mask_path
         self.out_dir = out_dir
-        if out_dir is not None:
-            os.makedirs(out_dir, exist_ok=True)
         self.map_type = map_type
         self.manual_threshold = manual_threshold
         self.step_size = step_size
         self.verbose = verbose
-        
-        # Set default thresholds by map_type
+        self.threshold = self._get_threshold()
+        if out_dir is not None:
+            self.out_dir = os.path.join(self.out_dir, f'{self.map_type}_overlap_maps')
+            os.makedirs(out_dir, exist_ok=True)
+
+    def _get_threshold(self):
         if self.manual_threshold is None:
             if self.map_type == 'ROI':
-                self.threshold = 0.0
+                threshold = 1.0
             elif self.map_type == 't':
-                self.threshold = 7.0
+                threshold = 7.0
             elif self.map_type == 'r':
-                self.threshold = 0.1
+                threshold = 0.1
             elif self.map_type == 'rfz':
-                self.threshold = 5.0
+                threshold = 5.0
             else:
                 raise ValueError("For 'custom' map_type, you must provide manual_threshold.")
         else:
-            self.threshold = float(self.manual_threshold)
+            threshold = float(self.manual_threshold)
+        return threshold
 
     def generate_overlap_maps(self):
         """
@@ -107,15 +110,12 @@ class OverlapMap:
             # Binarize each subject
             binarized = self._binarize(flatten_niftis, self.threshold)
             
-            # Sum binarized maps across subjects, then compute percent overlap
-            overlap_count = np.sum(binarized, axis=0)
-            overlap_map = (overlap_count / n_subj) * 100.0
-            
-            overlap_map_dict[dataset_name] = overlap_map
+            # Sum binarized maps across subjects, resulting in a map ranging from 0-N_subjects
+            overlap_map_dict[dataset_name] = np.nansum(binarized, axis=0).astype(np.float32)
         
         return overlap_map_dict
 
-    def generate_stepwise_maps(self, overlap_map_dict):
+    def generate_stepwise_maps(self):
         """
         Floor the overlap maps to integer bins of self.step_size. E.g. step_size=5 => 0,5,10,...
         
@@ -125,9 +125,20 @@ class OverlapMap:
             A dictionary of {dataset_name: stepwise_map}, where stepwise_map is the binned map.
         """
         stepwise_dict = {}
-        for dataset_name, overlap_map in overlap_map_dict.items():
-            # e.g. step_size=5 => floors 53 to 50, 49 to 45, etc.
-            stepwise = (np.floor(overlap_map / self.step_size) * self.step_size).astype(np.float32)
+        for dataset_name in self.data_loader.dataset_paths_dict.keys():
+            data = self.data_loader.load_dataset(dataset_name)
+            niftis = data["niftis"]  # shape: (n_subj, x, y, z) or (n_subj, n_voxels)
+            
+            # Ensure 2D shape: (n_subj, n_voxels)
+            n_subj = niftis.shape[0]
+            flatten_niftis = niftis.reshape(n_subj, -1)
+            
+            # Binarize each subject
+            binarized = self._binarize(flatten_niftis, self.threshold)
+            
+            # Sum binarized maps across subjects, resulting in a map ranging from 0-N_subjects
+            percent_overlap_map = np.sum(binarized, axis=0) / n_subj * 100.0
+            stepwise = (np.floor(percent_overlap_map / self.step_size) * self.step_size).astype(np.float32)
             stepwise_dict[dataset_name] = stepwise
         return stepwise_dict
 
@@ -207,6 +218,7 @@ class OverlapMap:
             mdata = nimds.get_img("mni_icbm152")
             mask_data = mdata.get_fdata()
             mask_affine = mdata.affine
+            mask_header = mdata.header
         return mask_data, mask_affine
 
     def _save_map(self, map_data, file_name):
@@ -215,11 +227,9 @@ class OverlapMap:
         """
         unmasked_map, mask_affine = self._unmask_array(map_data)
         img = nib.Nifti1Image(unmasked_map, affine=mask_affine)
-        print(self.out_dir, self.map_type+'_overlap_maps')
         if self.out_dir is not None:
-            self.out_dir = os.path.join(self.out_dir, self.map_type+'_overlap_maps')
             os.makedirs(self.out_dir, exist_ok=True)
-            out_path = os.path.join(self.out_dir, file_name)
+            out_path = os.path.join(self.out_dir, f'threshold_{int(self.threshold)}_{file_name}')
             nib.save(img, out_path)
         return img
 
@@ -248,12 +258,12 @@ class OverlapMap:
         overlap_map_dict = self.generate_overlap_maps()
         
         # Generate stepwise maps
-        stepwise_map_dict = self.generate_stepwise_maps(overlap_map_dict)
+        stepwise_map_dict = self.generate_stepwise_maps()
         
         # Save them if out_dir is set
         if self.out_dir:
-            self.save_maps(overlap_map_dict, suffix='_overlap')
-            self.save_maps(stepwise_map_dict, suffix='_stepwise')
+            self.save_maps(overlap_map_dict, suffix='_n_overlap')
+            self.save_maps(stepwise_map_dict, suffix='_percent_overlap_stepwise')
         
         return overlap_map_dict, stepwise_map_dict
 

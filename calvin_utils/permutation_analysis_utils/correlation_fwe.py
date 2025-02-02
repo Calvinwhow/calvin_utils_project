@@ -290,6 +290,28 @@ class CalvinFWEMap():
             ranks[np.arange(arr.shape[0])[:, np.newaxis], sorter] = np.arange(arr.shape[1]) + 1
         return ranks
     
+
+    # Rank the data
+        X_ranked = self.efficient_rankdata(X, axis=0)
+        Y_ranked = self.efficient_rankdata(Y, axis=0)
+
+        if X_ranked.shape[0] != Y_ranked.shape[0]:
+            raise ValueError(f"The number of rows in X ({X_ranked.shape}) must match the number of rows in Y ({Y_ranked.shape}).")
+
+        # Calculate differences in ranks
+        D = np.square(X_ranked - Y_ranked)
+
+        # Sum the squared differences across patients
+        SIGMA_D = np.sum(D, axis=0)
+
+        # Calculate Spearman correlation
+        N = X_ranked.shape[0]
+        rho = 1 - ( (6 * SIGMA_D) / (N * (N**2 - 1)) )
+        if debug:
+            print("X: ", X.shape, " Y: ", Y.shape, " X_ranked: ", X_ranked.shape, " Y_ranked: ", Y_ranked.shape)
+            print("D: ", D.shape, " SIGMA_D: ", SIGMA_D.shape)
+            print('Spearman correlation matrix shape: ', rho.shape)
+    
     def prep_data(self, array):
         if not np.issubdtype(array.dtype, np.floating):
             array = array.astype(float)
@@ -311,6 +333,8 @@ class CalvinFWEMap():
         Note:
             Spearman correlation will generate a NaN value when there is no variation in either X or Y. 
         """
+        print(f"Evalauting {X.shape[0]} patients")
+        print(f"Spearman vectorization state: {self.vectorize}")
         if not self.vectorize:
             from scipy.stats import spearmanr
             #Initialize
