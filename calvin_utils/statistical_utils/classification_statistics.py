@@ -519,12 +519,22 @@ class MulticlassClassificationEvaluation:
             plt.savefig(os.path.join(self.out_dir, "rasterized_probabilities.png"))
             plt.savefig(os.path.join(self.out_dir, "rasterized_probabilities.svg"))
         plt.show()
+        
+    def handle_nans(self):
+        self.predictions = np.nan_to_num(self.predictions)
+        self.observations = np.nan_to_num(self.observations)
+        self.predictions_df = self.predictions_df.fillna(value=0)
+        self.observations_df = self.observations_df.fillna(value=0)
+        self.raw_observations = np.nan_to_num(self.raw_observations)
+        self.raw_predictions = np.nan_to_num(self.raw_predictions)
+        self.outcome_matrix = self.outcome_matrix.fillna(value=0)
     
     def run(self):
         """Orchestrates the calculation and display of all evaluation metrics."""
         self.get_predictions()
         self.get_observations()
         self.rasterized_probability_plot()
+        self.handle_nans()
 
 class MulticlassOneVsAllROC(MulticlassClassificationEvaluation):
     """
@@ -672,7 +682,7 @@ class MulticlassOneVsAllROC(MulticlassClassificationEvaluation):
 
         metrics_df = pd.DataFrame(metrics)
         return metrics_df
-    
+
     def plot_roc_curves(self, silent=False):
         """
         Plots ROC curves for each class using a One-vs-Rest approach.
@@ -689,6 +699,7 @@ class MulticlassOneVsAllROC(MulticlassClassificationEvaluation):
         
         # Binarize the output
         for i in range(n_classes):
+
             if len(self.raw_predictions.shape)==1:                                                      # binomial case
                 fpr[i], tpr[i], _ = roc_curve(self.raw_observations, self.raw_predictions)
             else:                                                                                       # multinomial case
@@ -707,10 +718,10 @@ class MulticlassOneVsAllROC(MulticlassClassificationEvaluation):
                 plt.plot(fpr[i], tpr[i], color=color, lw=2,
                         label=f'ROC curve of class {category}' + ' (area = {1:0.2f})'
                         ''.format(i, roc_auc[i]))
-        
+                
         # PLOT MICRO-AVERAGE ROC CURVE
         if self.results is not None:
-            fpr, tpr, _ = roc_curve(self.outcome_matrix.to_numpy().ravel(), self.results.predict().ravel()) #??self.results.predict().ravel(). this was previously results.to_numpy().ravel().
+            fpr, tpr, _ = roc_curve(self.outcome_matrix.to_numpy().ravel(), self.raw_predictions.ravel()) #??self.results.predict().ravel(). this was previously results.to_numpy().ravel().
         else:      
             # outcomes, predictions = self.prepare_micro_average_dfs()    
             fpr, tpr, thresholds = roc_curve(self.observations_df.to_numpy().ravel(), self.predictions_df.to_numpy().ravel())
@@ -791,9 +802,9 @@ class MacroAverageROC(MulticlassOneVsAllROC):
         mean_tpr = np.zeros_like(all_fpr)
         for i in range(n_classes):
             if len(self.raw_predictions.shape) == 1:                    # Binomial Case
-                fpr, tpr, _ = roc_curve(self.outcome_matrix, self.results.predict()) if self.results is not None else roc_curve(self.outcome_matrix, self.predictions_df)
+                fpr, tpr, _ = roc_curve(self.outcome_matrix, self.raw_predictions) if self.results is not None else roc_curve(self.outcome_matrix, self.predictions_df)
             else:                                                       # Multinomial Case
-                fpr, tpr, _ = roc_curve(self.outcome_matrix.iloc[:, i], self.results.predict()[:, i]) if self.results is not None else roc_curve(self.outcome_matrix.iloc[:, i], self.predictions_df.iloc[:, i])
+                fpr, tpr, _ = roc_curve(self.outcome_matrix.iloc[:, i], self.raw_predictions[:, i]) if self.results is not None else roc_curve(self.outcome_matrix.iloc[:, i], self.predictions_df.iloc[:, i])
             
             mean_tpr += np.interp(all_fpr, fpr, tpr)
         
@@ -844,7 +855,7 @@ class MicroAverageROC(MacroAverageROC):
         n_classes = self.outcome_matrix.shape[1]
         # Aggregate all false positive rates and true positive rates
         if self.results is not None:
-            fpr, tpr, _ = roc_curve(self.outcome_matrix.to_numpy().ravel(), self.results.predict().ravel()) #??self.results.predict().ravel(). this was previously results.to_numpy().ravel().
+            fpr, tpr, _ = roc_curve(self.outcome_matrix.to_numpy().ravel(), self.raw_predictions.ravel()) 
         else:      
             # outcomes, predictions = self.prepare_micro_average_dfs()    
             fpr, tpr, thresholds = roc_curve(self.observations_df.to_numpy().ravel(), self.predictions_df.to_numpy().ravel())
@@ -891,7 +902,7 @@ class MulticlassAUPRC(MicroAverageROC):
         # Compute PR curve and AUPRC for each class
         for i in range(n_classes):
             if self.results is not None:
-                precision, recall, _ = precision_recall_curve(self.outcome_matrix.iloc[:, i], self.results.predict()[:, i])
+                precision, recall, _ = precision_recall_curve(self.outcome_matrix.iloc[:, i], self.raw_predictions[:, i])
             else:
                 precision, recall, _ = precision_recall_curve(self.outcome_matrix.iloc[:, i], self.predictions_df.iloc[:, i])
             expected = np.sum(self.outcome_matrix.iloc[:, i]) / self.outcome_matrix.shape[0]
@@ -899,7 +910,7 @@ class MulticlassAUPRC(MicroAverageROC):
         
         # calculate the micro-average
         if self.results is not None:
-            precision, recall, _ = precision_recall_curve(self.observations_df.to_numpy().ravel(),self.results.predict().ravel()) #??self.results.predict().ravel(). this was previously results.to_numpy().ravel().
+            precision, recall, _ = precision_recall_curve(self.observations_df.to_numpy().ravel(),self.raw_predictions.ravel()) 
         else:      
             # outcomes, predictions = self.prepare_micro_average_dfs()    
             precision, recall, _ = precision_recall_curve(self.observations_df.to_numpy().ravel(), self.predictions_df.to_numpy().ravel())
@@ -933,10 +944,10 @@ class MulticlassAUPRC(MicroAverageROC):
         for i in range(n_classes):
             
             if len(self.raw_predictions.shape)==1:                   # Binomial Case
-                precision, recall, _ = precision_recall_curve(self.outcome_matrix, self.results.predict()) if self.results is not None else precision_recall_curve(self.outcome_matrix, self.predictions_df)
+                precision, recall, _ = precision_recall_curve(self.outcome_matrix, self.raw_predictions) if self.results is not None else precision_recall_curve(self.outcome_matrix, self.predictions_df)
                 expected = np.sum(self.outcome_matrix) / self.outcome_matrix.shape[0]
             else:                                                    # Multinomial Case
-                precision, recall, _ = precision_recall_curve(self.outcome_matrix.iloc[:, i], self.results.predict()[:, i]) if self.results is not None else precision_recall_curve(self.outcome_matrix.iloc[:, i], self.predictions_df.iloc[:, i])
+                precision, recall, _ = precision_recall_curve(self.outcome_matrix.iloc[:, i], self.raw_predictions[:, i]) if self.results is not None else precision_recall_curve(self.outcome_matrix.iloc[:, i], self.predictions_df.iloc[:, i])
                 expected = np.sum(self.outcome_matrix.iloc[:, i]) / self.outcome_matrix.shape[0]
             
             # Interpolate all PR curves at these points
@@ -1005,6 +1016,7 @@ class ComprehensiveMulticlassROC(MulticlassAUPRC):
         """
         Orchestrates the evaluation including both the macro-average and micro-average ROC curves.
         """
+        os.makedirs(self.out_dir, exist_ok=True)
         super().run()
 
     def get_micro_auc(self):
@@ -1155,7 +1167,8 @@ class ComprehensiveMulticlassROC(MulticlassAUPRC):
         
         plt.tight_layout()
         if out_dir is not None:
-            plt.savefig(out_dir + 'bootstrapped_ovr_aurocs.svg')
+            os.makedirs(out_dir, exist_ok=True)
+            plt.savefig(out_dir + '/bootstrapped_ovr_aurocs.svg')
         plt.show()
                 
 def compute_accuracy(sample, threshold, y_true_variable, independent_variable):
@@ -1335,3 +1348,255 @@ def bootstrap_auc(outcome_matrix, design_matrix, n_iterations=1000, model=None):
     lower_ci = np.percentile(auc_scores, 2.5)
     upper_ci = np.percentile(auc_scores, 97.5)    
     return np.mean(auc_scores), lower_ci, upper_ci
+
+
+### Specific Functions ###
+from sklearn.metrics import roc_curve, confusion_matrix, accuracy_score
+import numpy as np
+import pandas as pd
+
+def calculate_youden(
+    raw_observations: np.ndarray,
+    raw_predictions: np.ndarray,
+    outcome_matrix_cols
+):
+    """
+    Calculates Youden's J for each class, and bootstraps Sensitivity, Specificity, NPV, PPV, and Accuracy
+    at the corresponding cut point. Returns a summary DataFrame for each class.
+
+    Parameters
+    ----------
+    raw_observations : np.ndarray
+        Ground truth one-hot encoded array of shape (n_samples, n_classes).
+    raw_predictions : np.ndarray
+        Predicted probabilities for each class of shape (n_samples, n_classes).
+    outcome_matrix_cols : list-like
+        The column (class) labels, typically from `outcome_matrix.columns`.
+
+    Returns
+    -------
+    metrics_dfs : dict
+        two dictionaries where keys are class names are keys. values for first are youden's j, values for second are threhsold for each youdens j
+    """
+    n_classes = raw_observations.shape[1]
+
+    youden_dict = {}
+    threshold_dict = {}
+    for i in range(n_classes):
+        class_name = outcome_matrix_cols[i]
+        y_true = raw_observations[:, i]
+        y_score = raw_predictions[:, i]
+
+        # Calculate the optimal threshold using Youden's J
+        fpr, tpr, thresholds = roc_curve(y_true, y_score)
+        youden_j = tpr - fpr
+        optimal_idx = np.argmax(youden_j)
+        optimal_threshold = thresholds[optimal_idx]
+
+        # Store the summary DataFrame for the current class
+        youden_dict[class_name] = youden_j[optimal_idx]
+        threshold_dict[class_name] = optimal_threshold
+    return youden_dict, threshold_dict
+
+def calculate_metrics_at_threshold(
+    raw_observations: np.ndarray,
+    raw_predictions: np.ndarray,
+    outcome_matrix_cols,
+    threshold_dict,
+    n_bootstraps: int = 1000,
+    random_state: int = None,
+    ci_alpha: float = 0.95
+):
+    """
+    Calculates Youden's J for each class, and bootstraps Sensitivity, Specificity, NPV, PPV, and Accuracy
+    at the corresponding cut point. Returns a summary DataFrame for each class.
+
+    Parameters
+    ----------
+    raw_observations : np.ndarray
+        Ground truth one-hot encoded array of shape (n_samples, n_classes).
+    raw_predictions : np.ndarray
+        Predicted probabilities for each class of shape (n_samples, n_classes).
+    outcome_matrix_cols : list-like
+        The column (class) labels, typically from `outcome_matrix.columns`.
+    threshold_dict : dict
+        the dictionary where keys correspond to classes and values correspond to thresholds to evaluate 
+    n_bootstraps : int
+        Number of bootstrap iterations.
+    random_state : int
+        Controls reproducibility of the random sampling.
+    ci_alpha : float
+        Confidence interval coverage (0 < ci_alpha < 1). 0.95 -> 95% CI.
+
+    Returns
+    -------
+    metrics_dfs : dict
+        A dictionary where keys are class names and values are DataFrames with rows
+        as metrics (Sensitivity, Specificity, NPV, PPV, Accuracy) and columns as
+        mean, lower bound, and upper bound.
+    """
+    rng = np.random.default_rng(seed=random_state)
+    n_classes = raw_observations.shape[1]
+
+    metrics_dfs = {}
+    for i in range(n_classes):
+        class_name = outcome_matrix_cols[i]
+        y_true = raw_observations[:, i]
+        y_score = raw_predictions[:, i]
+        optimal_threshold = threshold_dict[class_name]
+
+        # Call a helper function to calculate bootstrapped metrics
+        metrics_summary = bootstrap_metrics_at_cutpoint(y_true, y_score, optimal_threshold, n_bootstraps, rng, ci_alpha)
+
+        # Store the summary DataFrame for the current class
+        metrics_dfs[class_name] = metrics_summary
+    return metrics_dfs
+
+def calculate_youden_and_metrics(
+    raw_observations: np.ndarray,
+    raw_predictions: np.ndarray,
+    outcome_matrix_cols,
+    n_bootstraps: int = 1000,
+    random_state: int = None,
+    ci_alpha: float = 0.95
+):
+    """
+    Calculates Youden's J for each class, and bootstraps Sensitivity, Specificity, NPV, PPV, and Accuracy
+    at the corresponding cut point. Returns a summary DataFrame for each class.
+
+    Parameters
+    ----------
+    raw_observations : np.ndarray
+        Ground truth one-hot encoded array of shape (n_samples, n_classes).
+    raw_predictions : np.ndarray
+        Predicted probabilities for each class of shape (n_samples, n_classes).
+    outcome_matrix_cols : list-like
+        The column (class) labels, typically from `outcome_matrix.columns`.
+    n_bootstraps : int
+        Number of bootstrap iterations.
+    random_state : int
+        Controls reproducibility of the random sampling.
+    ci_alpha : float
+        Confidence interval coverage (0 < ci_alpha < 1). 0.95 -> 95% CI.
+
+    Returns
+    -------
+    metrics_dfs : dict
+        A dictionary where keys are class names and values are DataFrames with rows
+        as metrics (Sensitivity, Specificity, NPV, PPV, Accuracy) and columns as
+        mean, lower bound, and upper bound.
+    """
+    rng = np.random.default_rng(seed=random_state)
+    n_classes = raw_observations.shape[1]
+
+    metrics_dfs = {}
+    print("--Optimal Threshold--")
+    for i in range(n_classes):
+        class_name = outcome_matrix_cols[i]
+        y_true = raw_observations[:, i]
+        y_score = raw_predictions[:, i]
+
+        # Calculate the optimal threshold using Youden's J
+        fpr, tpr, thresholds = roc_curve(y_true, y_score)
+        youden_j = tpr - fpr
+        optimal_idx = np.argmax(youden_j)
+        optimal_threshold = thresholds[optimal_idx]
+
+        # Call a helper function to calculate bootstrapped metrics
+        metrics_summary = bootstrap_metrics_at_cutpoint(
+            y_true, y_score, optimal_threshold, n_bootstraps, rng, ci_alpha
+        )
+        print(f"{class_name}: {optimal_threshold}")
+
+        # Store the summary DataFrame for the current class
+        metrics_dfs[class_name] = metrics_summary
+    return metrics_dfs
+
+
+def bootstrap_metrics_at_cutpoint(
+    y_true: np.ndarray,
+    y_score: np.ndarray,
+    cutpoint: float,
+    n_bootstraps: int,
+    rng,
+    ci_alpha: float
+):
+    """
+    Bootstraps Sensitivity, Specificity, NPV, PPV, and Accuracy at a given cut point.
+
+    Parameters
+    ----------
+    y_true : np.ndarray
+        Ground truth binary labels.
+    y_score : np.ndarray
+        Predicted probabilities for the positive class.
+    cutpoint : float
+        The threshold at which to calculate the metrics.
+    n_bootstraps : int
+        Number of bootstrap iterations.
+    rng : np.random.Generator
+        Random number generator for reproducibility.
+    ci_alpha : float
+        Confidence interval coverage (0 < ci_alpha < 1). 0.95 -> 95% CI.
+
+    Returns
+    -------
+    metrics_summary_df : pd.DataFrame
+        DataFrame with rows as metrics (Sensitivity, Specificity, NPV, PPV, Accuracy)
+        and columns as mean, lower bound, and upper bound.
+    """
+    metrics = {"Sensitivity": [], "Specificity": [], "NPV": [], "PPV": [], "Accuracy": []}
+
+    n_samples = len(y_true)
+
+    for _ in range(n_bootstraps):
+        # Sample with replacement
+        idx = rng.integers(0, n_samples, n_samples)
+        y_true_boot = y_true[idx]
+        y_score_boot = y_score[idx]
+
+        # Convert probabilities to binary predictions using the cutpoint
+        y_pred_boot = (y_score_boot >= cutpoint).astype(int)
+
+        # Calculate confusion matrix
+        tn, fp, fn, tp = confusion_matrix(y_true_boot, y_pred_boot).ravel()
+
+        # Calculate metrics
+        sens = tp / (tp + fn) if (tp + fn) > 0 else np.nan  # Sensitivity
+        spec = tn / (tn + fp) if (tn + fp) > 0 else np.nan  # Specificity
+        ppv = tp / (tp + fp) if (tp + fp) > 0 else np.nan  # Positive Predictive Value
+        npv = tn / (tn + fn) if (tn + fn) > 0 else np.nan  # Negative Predictive Value
+        acc = accuracy_score(y_true_boot, y_pred_boot)     # Accuracy
+
+        metrics["Sensitivity"].append(sens)
+        metrics["Specificity"].append(spec)
+        metrics["NPV"].append(npv)
+        metrics["PPV"].append(ppv)
+        metrics["Accuracy"].append(acc)
+
+    # Calculate mean, lower bound, and upper bound for each metric
+    rows = []
+    alpha_lower = (1.0 - ci_alpha) / 2.0
+    alpha_upper = 1.0 - alpha_lower
+
+    for metric, values in metrics.items():
+        values_clean = [v for v in values if not np.isnan(v)]
+        if len(values_clean) == 0:
+            rows.append([metric, np.nan, np.nan, np.nan])
+        else:
+            mean_val = np.mean(values_clean)
+            lower_bound = np.quantile(values_clean, alpha_lower)
+            upper_bound = np.quantile(values_clean, alpha_upper)
+            rows.append([metric, mean_val, lower_bound, upper_bound])
+
+    metrics_summary_df = pd.DataFrame(
+        rows, columns=["Metric", "Mean", f"{alpha_lower:.3g}%", f"{alpha_upper:.3g}%"]
+    ).set_index("Metric")
+
+    return metrics_summary_df
+
+def save_dfs(dfs:dict, out_dir=None):
+    os.makedirs(out_dir, exist_ok=True)
+    for name, df in dfs.items():
+        if out_dir is not None:
+            df.to_csv(out_dir + '/' + name + '.csv')

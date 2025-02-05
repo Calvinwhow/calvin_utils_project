@@ -23,9 +23,6 @@ import numpy as np
 # For PDD
 import statsmodels.discrete.discrete_model as smd
 
-
-style_talk = 'seaborn-talk'    #refer to plt.style.available
-
 def calculate_vif(df):
 
     """
@@ -941,6 +938,7 @@ class PartialDependencePlot(EMMPlot):
         self.out_dir = out_dir
         self.marginal_method = marginal_method
         self.debug = debug
+        os.makedirs(self.out_dir, exist_ok=True)
         
     def partial_dependence_plots(self):
         """
@@ -968,7 +966,10 @@ class PartialDependencePlot(EMMPlot):
             plt.title(f"Partial Dependence Plot for {classification}")
             
             for variable in self.variables_df['Variable']:
-                sns.lineplot(x=results_df[f'{variable}'], y=results_df[f'{variable}_predictions'], label=variable, palette=palette)
+                sns.lineplot(x=results_df[f'{variable}'], 
+                            y=results_df[f'{variable}_predictions'], 
+                            label=variable, 
+                            palette=palette)
             
             plt.xlabel("Variable Value")
             plt.ylabel("Predicted Probability")
@@ -1071,7 +1072,7 @@ class PartialDependencePlot(EMMPlot):
         if isinstance(self.model, smd.MNLogit) or isinstance(self.model, smd.Logit):
             if self.outcomes_df is None:
                 raise TypeError("Logistic model detected, but outcomes_df is none. \n You must enter the dataframe containing the observations. ")
-                    
+              
     def run(self):
         """
         Orchestration Method
