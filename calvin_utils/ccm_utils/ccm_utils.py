@@ -7,21 +7,24 @@ import pandas as pd
 from tqdm import tqdm
 from calvin_utils.ccm_utils.npy_utils import DataLoader
 from calvin_utils.ccm_utils.stat_utils import CorrelationCalculator
+from calvin_utils.ccm_utils.optimization import NiftiOptimizer
 import seaborn as sns
 from matplotlib.colors import TwoSlopeNorm
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 from matplotlib.colors import LinearSegmentedColormap
+
 from calvin_utils.ccm_utils.stat_utils_jax import _calculate_pearson_r_map_jax, _rankdata_jax
 import time
 
 class ConvergentMapGenerator:
-    def __init__(self, corr_map_dict, data_loader, mask_path=None, out_dir=None, weight=False):
+    def __init__(self, corr_map_dict, data_loader, mask_path=None, out_dir=None, weight=False, optimizer=False):
         self.corr_map_dict = corr_map_dict
         self.data_loader = data_loader
         self.mask_path = mask_path
         self.out_dir = out_dir
         self.weight = weight
+        self.optimizer = optimizer
         if out_dir is not None: os.makedirs(out_dir, exist_ok=True)
         self._handle_nans()
         
@@ -70,6 +73,88 @@ class ConvergentMapGenerator:
         img = nib.load(path)
         return img.get_fdata()
     
+    def _align_signs(self, images_dict, reference=None):
+        """
+        Align the signs of all brain images in `images_dict` so that the average
+        pairwise Pearson's R is (roughly) maximized by flipping signs where needed.
+        
+        images_dict: dict[str, np.ndarray]
+            Keys are dataset names, values are the corresponding brain images.
+        
+        Returns
+        -------
+        aligned_dict : dict[str, np.ndarray]
+            A copy of `images_dict` with some values possibly flipped (multiplied by -1).
+        """
+        keys = list(images_dict.keys())
+        # Flatten each image to 1D for correlation
+        flattened = [images_dict[k].ravel() for k in keys]
+        
+        # 1) Build a reference by summing all flattened images
+        if reference is None: 
+            reference = flattened[0]
+        elif reference=='sum':
+            reference = np.sum(flattened, axis=0)
+        else:
+            reference = [images_dict[reference].ravel()]
+            
+        
+        # 2) Flip sign of each image if it negatively correlates with the reference
+        aligned_dict = {}
+        for idx, k in enumerate(keys):
+            r_val = np.corrcoef(flattened[idx], reference)[0, 1]
+            if r_val < 0:
+                aligned_dict[k] = -images_dict[k]
+            else:
+                aligned_dict[k] = images_dict[k]
+
+        return aligned_dict
+    
+    def generate_optimal_average_r_map(self, override_corr_map_dict):
+        if override_corr_map_dict is None:
+            local_corr_map_dict = self.corr_map_dict
+        else:
+            local_corr_map_dict = override_corr_map_dict
+            
+        optimizer = NiftiOptimizer(local_corr_map_dict, self.data_loader, load_in_time=True)
+        optimal_average_r_map = optimizer.optimize()
+        return optimal_average_r_map
+
+    def generate_and_save_maps(self, verbose=False, group_dict={}, dir='', align_all_maps=False):
+        if group_dict == {}:
+            group_dict = {ds: 'all_datasets' for ds in self.corr_map_dict.keys()}
+            
+        for group in set(group_dict.values()):
+            # get the datasets that belong to the group you are working on
+            datasets_in_group = [key for key, val in group_dict.items() if val == group]
+            local_corr_map_dict = {dataset: self.corr_map_dict[dataset] for dataset in datasets_in_group}
+            
+            # if align maps, set them all so they have the same sign spatial correlation
+            if align_all_maps: 
+                local_corr_map_dict = self._align_signs(local_corr_map_dict)
+            
+            # Generate weighted average r map
+            weighted_avg_map = self.generate_weighted_average_r_map(local_corr_map_dict)
+            weighted_avg_img = self._save_map(weighted_avg_map, f'{dir}{group}_weighted_average_r_map.nii.gz')
+            try:
+                if verbose: self._visualize_map(weighted_avg_img, f'{group} Weighted Average R Map')
+            except: pass
+
+            # Generate agreement map
+            agreement_map = self.generate_agreement_map(local_corr_map_dict)
+            agreement_img = self._save_map(agreement_map, f'{dir}{group}_agreement_map.nii.gz')
+            try:
+                if verbose: self._visualize_map(agreement_img, f'{group} Agreement Map')
+            except: pass
+            
+            # Generate optimized r map
+            if self.optimizer:
+                optimized_avg_map = self.generate_optimal_average_r_map(local_corr_map_dict)
+                optimized_avg_img = self._save_map(optimized_avg_map, f'{dir}{group}_optimized_avg_map.nii.gz')
+                try:
+                    if verbose: self._visualize_map(optimized_avg_img, f'{group} Optimal Avg Map')
+                except: pass
+                
     def _mask_array(self, data_array, threshold=0):
         if self.mask_path is None:
             from nimlab import datasets as nimds
@@ -114,66 +199,6 @@ class ConvergentMapGenerator:
     def _visualize_map(self, img, title):
         plotting.view_img(img, title=title).open_in_browser()
     
-    def _align_signs(self, images_dict):
-        """
-        Align the signs of all brain images in `images_dict` so that the average
-        pairwise Pearson's R is (roughly) maximized by flipping signs where needed.
-        
-        images_dict: dict[str, np.ndarray]
-            Keys are dataset names, values are the corresponding brain images.
-        
-        Returns
-        -------
-        aligned_dict : dict[str, np.ndarray]
-            A copy of `images_dict` with some values possibly flipped (multiplied by -1).
-        """
-        keys = list(images_dict.keys())
-        # Flatten each image to 1D for correlation
-        flattened = [images_dict[k].ravel() for k in keys]
-        
-        # 1) Build a reference by summing all flattened images
-        reference = np.sum(flattened, axis=0)
-        
-        # 2) Flip sign of each image if it negatively correlates with the reference
-        aligned_dict = {}
-        for idx, k in enumerate(keys):
-            r_val = np.corrcoef(flattened[idx], reference)[0, 1]
-            if r_val < 0:
-                aligned_dict[k] = -images_dict[k]
-            else:
-                aligned_dict[k] = images_dict[k]
-
-        return aligned_dict
-
-
-    def generate_and_save_maps(self, verbose=False, group_dict={}, dir='', align_all_maps=False):
-        if group_dict == {}:
-            group_dict = {ds: 'all_datasets' for ds in self.corr_map_dict.keys()}
-            align_all_maps = True
-            
-        for group in set(group_dict.values()):
-            # get the datasets that belong to the group you are working on
-            datasets_in_group = [key for key, val in group_dict.items() if val == group]
-            local_corr_map_dict = {dataset: self.corr_map_dict[dataset] for dataset in datasets_in_group}
-            
-            # if align maps, set them all so they have the same sign spatial correlation
-            if align_all_maps: 
-                local_corr_map_dict = self._align_signs(local_corr_map_dict)
-            
-            # Generate weighted average r map
-            weighted_avg_map = self.generate_weighted_average_r_map(local_corr_map_dict)
-            weighted_avg_img = self._save_map(weighted_avg_map, f'{dir}{group}_weighted_average_r_map.nii.gz')
-            try:
-                if verbose: self._visualize_map(weighted_avg_img, f'{group} Weighted Average R Map')
-            except: pass
-
-            # Generate agreement map
-            agreement_map = self.generate_agreement_map(local_corr_map_dict)
-            agreement_img = self._save_map(agreement_map, f'{dir}{group}_agreement_map.nii.gz')
-            try:
-                if verbose: self._visualize_map(agreement_img, f'{group} Agreement Map')
-            except: pass
-    
     def save_individual_r_maps(self, verbose=False, dir=''):
         for dataset_name, r_map in self.corr_map_dict.items():
             r_img = self._save_map(r_map, f'{dir}{dataset_name}_correlation_map.nii.gz')
@@ -182,7 +207,7 @@ class ConvergentMapGenerator:
 
 from math import log, exp, sqrt
 class LOOCVAnalyzer(ConvergentMapGenerator):
-    def __init__(self, corr_map_dict, data_loader, mask_path=None, out_dir=None, weight=False, method='spearman', convergence_type='agreement', similarity='cos', n_bootstrap=1000, roi_path=None, group_dict={}, datasets_to_flip = []):
+    def __init__(self, corr_map_dict, data_loader, mask_path=None, out_dir=None, weight=False, method='spearman', similarity='spatial_correl', optimizer=False, n_bootstrap=1000, roi_path=None, group_dict={}, datasets_to_flip = []):
         """
         Initialize the LOOCVAnalyzer.
 
@@ -202,11 +227,13 @@ class LOOCVAnalyzer(ConvergentMapGenerator):
             Correlation method to use ('spearman' or 'pearson').
         n_bootstrap : int, optional
             Number of bootstrap samples to generate.
-        convergence_type : str, optional
-            Type of convergence to use ('agreement' or other types). Default is 'agreement'.
         similarity : str, optional
-            Similarity measure to use ('cos' for cosine similarity or other measures). Default is 'cos'.
-            Number of bootstrap samples to generate. Default is 1000.
+            Similarity measure to use ('cos' for cosine similarity or other measures). Options: 'cosine' and 'spatial_correl'
+            If 'spatial_correl', will use the weighted average map with spatial correlation (pearson r).
+            If 'cosine', will use the agreement map with cosine similarity.
+            Default is 'spatial_correl'.
+        optimizer : bool, optional
+            If set to True, will call optimization.py and us gradient ascent to optimize the combination of maps into the composite map.
         roi_path : str, optional
             Path to ROI file to use in place of convergent map. 
             Cosine similarity is best to use with this choice.
@@ -218,11 +245,10 @@ class LOOCVAnalyzer(ConvergentMapGenerator):
             A list of keys corresponding to datasets which should have their correlation maps multiplied by -1. 
             This is typically performed to align maps to enable testing of topology, controlling for sign. 
         """
-        super().__init__(corr_map_dict, data_loader, mask_path, out_dir, weight)
+        super().__init__(corr_map_dict, data_loader, mask_path, out_dir, weight, optimizer=optimizer)
         self.method = method
         self.n_bootstrap = n_bootstrap
         self.similarity = similarity
-        self.convergence_type = convergence_type
         self.roi_path = roi_path
         self.group_dict = group_dict
         self.out_dir=out_dir
@@ -310,14 +336,14 @@ class LOOCVAnalyzer(ConvergentMapGenerator):
             # TRAIN - Generate the convergent map using the training datasets (or an ROI)
             if self.roi_path is not None:
                 convergent_map = self.generate_convergent_roi()
-            elif self.convergence_type == 'average':
+            elif self.similarity == 'spatial_correl':
                 local_corr_map_dict = self.generate_correlation_maps(train_dataset_names)
                 convergent_map = self.generate_weighted_average_r_map(local_corr_map_dict)
-            elif self.convergence_type == 'agreement':
+            elif self.similarity == 'cosine':
                 local_corr_map_dict = self.generate_correlation_maps(train_dataset_names)
                 convergent_map = self.generate_agreement_map(local_corr_map_dict)
             else:
-                raise ValueError("Invalid convergence type (self.convergence_type). Please choose 'average', 'agreement', or set path to a region of interest to test (self.roi_path).")
+                raise ValueError("Invalid similarity type (self.similarity). Please choose 'spatial_correl', 'cosine', or set path to a region of interest to test (self.roi_path).")
 
             # TEST - use the convergent map on the test dataset
             test_niftis = CorrelationCalculator._check_for_nans(test_niftis, nanpolicy='remove', verbose=False)
@@ -368,9 +394,9 @@ class LOOCVAnalyzer(ConvergentMapGenerator):
         """
         patient_maps = CorrelationCalculator._check_for_nans(patient_maps, nanpolicy='remove', verbose=False)
         
-        if self.similarity == 'cos':
+        if self.similarity == 'cosine':
             similarities = [self.cosine_similarity(patient_map, convergent_map) for patient_map in patient_maps]
-        elif self.similarity == 'spcorr':
+        elif self.similarity == 'spatial_correl':
             similarities = [pearsonr(patient_map.flatten(), convergent_map.flatten())[0] for patient_map in patient_maps]
         else:
             raise ValueError("Invalid similarity measure (self.similarity). Please choose 'cos' or 'spcorr'.")
@@ -462,11 +488,11 @@ class LOOCVAnalyzer(ConvergentMapGenerator):
 
         # Create DataFrame for Seaborn
         df = pd.DataFrame({"Similarity": similarities, "Outcome": indep_var})
-        xlab = 'Cosine Similarity' if self.similarity == 'cos' else 'Spatial Correlation'
+        xlab = 'Cosine Similarity' if self.similarity == 'cosine' else 'Spatial Correlation'
 
         # Create LM plot
-        plt.figure(figsize=(6, 4))
-        sns.lmplot(data=df, x="Similarity", y="Outcome", height=4, aspect=1.5, scatter_kws={'alpha': 0.5})
+        plt.figure(figsize=(4, 4))
+        sns.lmplot(data=df, x="Similarity", y="Outcome", height=4, aspect=1, scatter_kws={'alpha': 0.5})
 
         # Title with rho, p-value, and dataset name
         plt.title(f"{dataset_name}: Spearman ρ = {rho:.2f}, p = {p:.2e} \n Pearson r = {r:.2f}, p = {pr:.2e}")
@@ -889,3 +915,48 @@ class CorrelationAnalysis:
             plt.savefig(os.path.join(output_path, f'similarity-{self.observed_average}_p-{self.p_value}_{output_file}'))
         plt.show()
         return limit
+    
+### GENERAL NIFTI FUNCTIONS ###
+                    
+def mask_array(mask_path, data_array, threshold=0):
+    if mask_path is None:
+        from nimlab import datasets as nimds
+        mask = nimds.get_img("mni_icbm152")
+    else:
+        mask = nib.load(mask_path)
+    mask_data = mask.get_fdata()
+    mask_indices = mask_data.flatten() > threshold
+    masked_array = data_array.flatten()[mask_indices]
+    return masked_array
+
+def unmask_array(mask_path, data_array, threshold=0):
+    if mask_path is None:
+        from nimlab import datasets as nimds
+        mask = nimds.get_img("mni_icbm152")
+    else:
+        mask = nib.load(mask_path)
+    mask_data = mask.get_fdata()
+    mask_indices = mask_data.flatten() > threshold
+    unmasked_array = np.zeros(mask_indices.shape)
+    unmasked_array[mask_indices] = data_array.flatten()
+    return unmasked_array.reshape(mask_data.shape), mask.affine
+
+def save_map(map_data, out_dir, file_name, mask_path=None):
+    unmasked_map, mask_affine = unmask_array(data_array=map_data, mask_path=mask_path)
+    img = nib.Nifti1Image(unmasked_map, affine=mask_affine)
+    file_path = os.path.join(out_dir, file_name)
+    if out_dir is not None:
+        if bool(os.path.splitext(file_path)[1]):
+            os.makedirs(os.path.dirname(file_path), exist_ok=True)
+        else: 
+            os.makedirs(out_dir, exist_ok=True)
+        nib.save(img, file_path)
+        
+    return img
+
+def visualize_map(img, title):
+    plotting.view_img(img, title=title).open_in_browser()
+
+def save_individual_r_maps(data, verbose=False, out_dir='', filename='generated_map.nii.gz', mask_path=None):
+    r_img = save_map(map_data=data, out_dir=out_dir, file_name=filename, mask_path=mask_path)
+    if verbose: visualize_map(img=r_img, title=filename)

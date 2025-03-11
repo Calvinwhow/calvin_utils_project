@@ -126,6 +126,18 @@ const penaltyAllContacts = (v, lambda) => {// blocking function of style (1/(blo
     }
 };
 
+/**
+ * Calculates the penalty across number of selected contacts. If over number, penalize.
+ * @param {Array} v - Array of contact values (milliamperages)
+ * @param {number} lambda - Penalty coefficient.
+ * @param {number} numContacts - Max number of of contacts to allow (positive integer)
+ * @param {number} alpha - Steepness of the sigmoid function (default = 1)
+ * @returns {number} - Penalty value.
+ */
+const penaltyNumContacts = (v, lambda, numContacts, alpha = 1) => {
+    const activeContacts = v.filter(value => value > 0).length;
+    return lambda / (1 + Math.exp(-alpha * (activeContacts - numContacts)));
+};
 
 /**
  * Computes the loss function value.
@@ -139,6 +151,7 @@ const lossFunction = (sphereCoords, v, L, lambda) => {
     const T = targetFunctionHandler(sphereCoords, v, L);      // Compute the total target value across all relevant spheres
     const P1 = penaltyPerContactHandler(v, lambda);           // Compute the penalty for individual contacts
     const P2 = penaltyAllContacts(v, lambda);                 // Compute the overall penalty for the sum of contact values
+    const P3 = penaltyNumContacts(v, lambda);                 // Compute the penalty for the number of contacts
     return T - P1 - P2;                                       // Return the loss function value
 };
 
@@ -321,6 +334,29 @@ const projectConstraints = (v, maxTotal = 5) => {
 const projectAmpConstrains = (v, maxPer = 5) => {
     return v.map(component => Math.min(component, maxPer));
 };
+
+/**
+ * This function takes the max number of allowed contacts and the currect contact values. 
+ * It then selects the combination of N (max number) contacts which optimize Loss.
+ * @param {Array} v - Array of contact values.
+ * @param {number} numContacts - Maximum number of contacts to allow.
+ * @param {number} L - Flattened landscape values, an array of (n,m) where n is the points and m is 4 cols (x coord,y coord,z coord,magnitude)
+ * @param {number} lambda - Penalty coefficient.
+ * @returns {Array} - Projected contact values.
+ */
+const projectNumContacts = (sphereCoords, v, numContacts, L, lambda=1) => {
+    const positiveIndices = v.map((value, idx) => ({ value, idx })).filter(entry => entry.value > 0);       // get all positive amp indices
+    const losses = positiveIndices.map(({ value, idx }) => {                                                // get loss for each contact
+        let vSingle = new Array(v.length).fill(0);                                                          // set all other contacts to 0
+        vSingle[idx] = value;                                                                               // set this contact ot active value
+        return { idx, loss: lossFunction(sphereCoords, vCopy, L, lambda) };                                 // get loss for this contact        
+    });
+    losses.sort((a, b) => b.loss - a.loss);                                                                 // sort by loss (descending order)
+    const selectedIndices = losses.slice(0, numContacts).map(entry => entry.idx);                           // Top numContacts losses are selected
+    const mask = v.map((_, idx) => selectedIndices.includes(idx) ? 1 : 0);                                  // Create a mask for selected contacts
+    const projectedV = v.map((val, idx) => mask[idx] * val);                                                // Apply mask to threshold v back to constraints   
+    return projectedV;
+}
 
 // -----------------------------
 // Stop Condition Functions

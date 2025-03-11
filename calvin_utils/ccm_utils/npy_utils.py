@@ -11,6 +11,7 @@ class DataLoader:
         self.data_dict_path = data_dict_path
         with open(data_dict_path, 'r') as f:
             self.dataset_paths_dict = json.load(f)
+        self.dataset_names_list = [k for k in self.dataset_paths_dict.keys()]
         
     def load_dataset(self, dataset_name, nifti_type='niftis'):
         """

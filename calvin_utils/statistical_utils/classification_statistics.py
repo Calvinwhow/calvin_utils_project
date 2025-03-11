@@ -1168,8 +1168,70 @@ class ComprehensiveMulticlassROC(MulticlassAUPRC):
         plt.tight_layout()
         if out_dir is not None:
             os.makedirs(out_dir, exist_ok=True)
-            plt.savefig(out_dir + '/bootstrapped_ovr_aurocs.svg')
+            plt.savefig(os.path.join(out_dir, 'bootstrapped_ovr_aurocs.svg'))
         plt.show()
+        
+    @staticmethod
+    def plot_metric_with_ci(dfs, metric, out_dir):
+        """
+        Plots the specified metric with 95% confidence intervals for each disease.
+
+        Args:
+            dfs (dict): Dictionary containing DataFrames with 'Mean', '0.025%', and '0.975%' values.
+            metric (str): The metric to plot (e.g., "Sensitivity", "Specificity", "NPV", "PPV", "Accuracy").
+            out_dir (str): Directory where the plot should be saved.
+        """
+        plt.figure(figsize=(8, 6))
+        palette = sns.color_palette('tab10', n_colors=len(dfs.items()))
+
+        metric_means = []
+        metric_lows = []
+        metric_highs = []
+        disease_labels = []
+
+        for disease, df in dfs.items():
+            mean_val = df.loc[metric, "Mean"]
+            ci_low = df.loc[metric, "0.025%"]
+            ci_high = df.loc[metric, "0.975%"]
+
+            metric_means.append(mean_val)
+            metric_lows.append(ci_low)
+            metric_highs.append(ci_high)
+            disease_labels.append(disease)
+
+        # Create horizontal error bars with corresponding colors
+        for i, (mean, low, high, disease) in enumerate(zip(metric_means, metric_lows, metric_highs, disease_labels)):
+            plt.hlines(y=i, xmin=low, xmax=high, color=palette[i], alpha=0.7)
+            plt.scatter(mean, i, color=palette[i], zorder=3)
+
+        # Dashed line at 0.5
+        plt.axvline(0.5, linestyle='dashed', color='grey', linewidth=1)
+
+        # Formatting
+        plt.yticks(range(len(disease_labels)), disease_labels)
+        plt.xlim(0.4, 1.0)
+        plt.xlabel(metric)
+        plt.ylabel("Diseases")
+        plt.title(f"{metric} with 95% Confidence Intervals")
+        plt.grid(True, linestyle='dotted', alpha=0.6)
+
+        # Save the plot
+        if out_dir is not None:
+            os.makedirs(out_dir, exist_ok=True)
+            plt.savefig(os.path.join(out_dir, f"{metric.lower()}_confidence_intervals.svg"))
+        plt.show()
+        
+    @staticmethod
+    def generate_all_plots(dfs, out_dir):
+        """
+        Generates and saves confidence interval plots for all metrics.
+
+        Args:
+            dfs (dict): Dictionary containing DataFrames with metrics for different diseases.
+            out_dir (str): Directory where plots should be saved.
+        """
+        for metric in ["Sensitivity", "NPV", "Specificity", "PPV", "Accuracy"]:
+            ComprehensiveMulticlassROC.plot_metric_with_ci(dfs, metric, out_dir)
                 
 def compute_accuracy(sample, threshold, y_true_variable, independent_variable):
     """
@@ -1458,7 +1520,8 @@ def calculate_youden_and_metrics(
     outcome_matrix_cols,
     n_bootstraps: int = 1000,
     random_state: int = None,
-    ci_alpha: float = 0.95
+    ci_alpha: float = 0.95,
+    out_dir: None = None
 ):
     """
     Calculates Youden's J for each class, and bootstraps Sensitivity, Specificity, NPV, PPV, and Accuracy
@@ -1489,6 +1552,7 @@ def calculate_youden_and_metrics(
     rng = np.random.default_rng(seed=random_state)
     n_classes = raw_observations.shape[1]
 
+    youden_dict = {}
     metrics_dfs = {}
     print("--Optimal Threshold--")
     for i in range(n_classes):
@@ -1502,17 +1566,56 @@ def calculate_youden_and_metrics(
         optimal_idx = np.argmax(youden_j)
         optimal_threshold = thresholds[optimal_idx]
 
+        cm = get_confusion_matrix(y_true, y_score, optimal_threshold, class_name, normalization='pred', out_dir=out_dir)
         # Call a helper function to calculate bootstrapped metrics
         metrics_summary = bootstrap_metrics_at_cutpoint(
             y_true, y_score, optimal_threshold, n_bootstraps, rng, ci_alpha
         )
+        youden_dict[class_name] = [{'threshold': youden_j[optimal_idx]}, {'c_matrix': cm}]
         print(f"{class_name}: {optimal_threshold}")
 
         # Store the summary DataFrame for the current class
         metrics_dfs[class_name] = metrics_summary
-    return metrics_dfs
+    return metrics_dfs, youden_dict
 
+def get_confusion_matrix(y_true, y_score, optimal_threshold, class_name, normalization, out_dir=None, verbose=True, **kwargs):
+    '''
+    Params:
+    normalization - str, default='pred'
+        - 'pred' : normalize by the number of predictions (default)
+        - 'true' : normalize by the number of true labels
+        - 'all' : normalize by the number of samples
+        - None : no normalization
+    out_dir - str, default=None
+        - directory to save the confusion matrix plot
+    '''
+    # onyl works for binomial case (meant for a OVR confusion matrix )
+    y_pred = (y_score >= optimal_threshold).astype(int)
+    # Plot the confusion matrix
+    conf_matrix = confusion_matrix(y_true=y_true, y_pred=y_pred, normalize=normalization)
+    if verbose:
+        conf_matrix2 = confusion_matrix(y_true=y_true, y_pred=y_pred, normalize=None)
+        print(f"True Positives: {conf_matrix2[1, 1]}")
+        print(f"True Negatives: {conf_matrix2[0, 0]}")
+        print(f"False Positives: {conf_matrix2[0, 1]}")
+        print(f"False Negatives: {conf_matrix2[1, 0]}")
+    plot_cm(conf_matrix, class_name, out_dir=out_dir, **kwargs)
+    return conf_matrix
 
+def plot_cm(cm, class_name, cmap='viridis', annot=True, normalization=None, out_dir=None):
+    labels = np.array([ f"Not {class_name}", f"Is {class_name}"])
+    if normalization is None: digit_fmt = '1g'
+    else: digit_fmt = '.2f'
+    plt.figure(figsize=(8, 6))
+    sns.heatmap(cm, annot=annot, fmt=digit_fmt, xticklabels=labels, yticklabels=labels, cmap=cmap)
+    plt.xlabel('Predicted label')
+    plt.ylabel('True label')
+    plt.title(f'Confusion Matrix {class_name}')
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)
+        plt.savefig(os.path.join(out_dir, f'{class_name}_optimal_confusion_matrix.svg'))
+    plt.show()
+        
 def bootstrap_metrics_at_cutpoint(
     y_true: np.ndarray,
     y_score: np.ndarray,
