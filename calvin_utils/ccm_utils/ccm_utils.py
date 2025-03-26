@@ -18,13 +18,18 @@ from calvin_utils.ccm_utils.stat_utils_jax import _calculate_pearson_r_map_jax, 
 import time
 
 class ConvergentMapGenerator:
-    def __init__(self, corr_map_dict, data_loader, mask_path=None, out_dir=None, weight=False, optimizer=False):
+    def __init__(self, corr_map_dict, data_loader, mask_path=None, out_dir=None, weight=False, optimizer=False, align_all_maps=False):
         self.corr_map_dict = corr_map_dict
         self.data_loader = data_loader
         self.mask_path = mask_path
         self.out_dir = out_dir
         self.weight = weight
+        if self.weight:
+            self.prefix = 'weighted_avg'
+        else:
+            self.prefix = 'unweighted_avg'
         self.optimizer = optimizer
+        self.align_all_maps=align_all_maps
         if out_dir is not None: os.makedirs(out_dir, exist_ok=True)
         self._handle_nans()
         
@@ -47,9 +52,9 @@ class ConvergentMapGenerator:
                 data = self.data_loader.load_dataset(dataset_name)
                 weights.append(data['niftis'].shape[0])
             weights = np.array(weights)
-            return np.mean(r_maps, axis=0, weights=weights)
+            return np.average(r_maps, axis=0, weights=weights)
         else:
-            return np.mean(r_maps, axis=0)
+            return np.average(r_maps, axis=0)
 
     def generate_agreement_map(self, override_corr_map_dict=None, return_signed=True):
         '''
@@ -96,9 +101,8 @@ class ConvergentMapGenerator:
         elif reference=='sum':
             reference = np.sum(flattened, axis=0)
         else:
-            reference = [images_dict[reference].ravel()]
+            reference = [self.corr_map_dict[reference].ravel()]
             
-        
         # 2) Flip sign of each image if it negatively correlates with the reference
         aligned_dict = {}
         for idx, k in enumerate(keys):
@@ -120,7 +124,7 @@ class ConvergentMapGenerator:
         optimal_average_r_map = optimizer.optimize()
         return optimal_average_r_map
 
-    def generate_and_save_maps(self, verbose=False, group_dict={}, dir='', align_all_maps=False):
+    def generate_and_save_maps(self, verbose=False, group_dict={}, dir=''):
         if group_dict == {}:
             group_dict = {ds: 'all_datasets' for ds in self.corr_map_dict.keys()}
             
@@ -130,14 +134,14 @@ class ConvergentMapGenerator:
             local_corr_map_dict = {dataset: self.corr_map_dict[dataset] for dataset in datasets_in_group}
             
             # if align maps, set them all so they have the same sign spatial correlation
-            if align_all_maps: 
+            if self.align_all_maps: 
                 local_corr_map_dict = self._align_signs(local_corr_map_dict)
             
             # Generate weighted average r map
             weighted_avg_map = self.generate_weighted_average_r_map(local_corr_map_dict)
-            weighted_avg_img = self._save_map(weighted_avg_map, f'{dir}{group}_weighted_average_r_map.nii.gz')
+            weighted_avg_img = self._save_map(weighted_avg_map, f'{dir}{group}_{self.prefix}_r_map.nii.gz')
             try:
-                if verbose: self._visualize_map(weighted_avg_img, f'{group} Weighted Average R Map')
+                if verbose: self._visualize_map(weighted_avg_img, f'{group} {self.prefix} R Map')
             except: pass
 
             # Generate agreement map
@@ -207,7 +211,7 @@ class ConvergentMapGenerator:
 
 from math import log, exp, sqrt
 class LOOCVAnalyzer(ConvergentMapGenerator):
-    def __init__(self, corr_map_dict, data_loader, mask_path=None, out_dir=None, weight=False, method='spearman', similarity='spatial_correl', optimizer=False, n_bootstrap=1000, roi_path=None, group_dict={}, datasets_to_flip = []):
+    def __init__(self, corr_map_dict, data_loader, mask_path=None, out_dir=None, weight=False, method='spearman', similarity='spatial_correl', optimizer=False, n_bootstrap=1000, roi_path=None, group_dict={}, datasets_to_flip = [], align_all_maps=False):
         """
         Initialize the LOOCVAnalyzer.
 
@@ -245,7 +249,7 @@ class LOOCVAnalyzer(ConvergentMapGenerator):
             A list of keys corresponding to datasets which should have their correlation maps multiplied by -1. 
             This is typically performed to align maps to enable testing of topology, controlling for sign. 
         """
-        super().__init__(corr_map_dict, data_loader, mask_path, out_dir, weight, optimizer=optimizer)
+        super().__init__(corr_map_dict, data_loader, mask_path, out_dir, weight, optimizer=optimizer, align_all_maps=align_all_maps)
         self.method = method
         self.n_bootstrap = n_bootstrap
         self.similarity = similarity
@@ -352,8 +356,19 @@ class LOOCVAnalyzer(ConvergentMapGenerator):
             
             similarities = self.calculate_similarity(test_niftis, convergent_map)
             ci_lower, ci_upper, mean_r = self.correlate_similarity_with_outcomes(similarities, test_indep_var, test_dataset_name)
+            ci_lower, ci_upper, mean_r = self._align_correlations(ci_lower, ci_upper, mean_r)
             results.append((ci_lower, ci_upper, mean_r))
         return results
+    
+    def _align_correlations(self, ci_lower, ci_upper, mean_r):
+        '''Reorients the correlations to be positive if forcibly aligning maps'''
+        if self.align_all_maps:
+            if mean_r < 0:
+                stored_ci = ci_upper
+                ci_upper = ci_lower * -1
+                ci_lower = stored_ci * -1
+                mean_r = mean_r * -1
+        return ci_lower, ci_upper, mean_r
 
     def generate_correlation_maps(self, dataset_names):
         """
@@ -399,7 +414,7 @@ class LOOCVAnalyzer(ConvergentMapGenerator):
         elif self.similarity == 'spatial_correl':
             similarities = [pearsonr(patient_map.flatten(), convergent_map.flatten())[0] for patient_map in patient_maps]
         else:
-            raise ValueError("Invalid similarity measure (self.similarity). Please choose 'cos' or 'spcorr'.")
+            raise ValueError("Invalid similarity measure (self.similarity). Please choose 'cos' or 'spatial_correl'.")
         return similarities
     
     def cosine_similarity(self, a, b):
@@ -501,9 +516,9 @@ class LOOCVAnalyzer(ConvergentMapGenerator):
 
         # Save plot
         os.makedirs(self.out_dir+'/scatterplots', exist_ok=True)
+        plt.show()
         plt.savefig(os.path.join(self.out_dir, f"scatterplots/{dataset_name}_scatterplot.svg"), bbox_inches="tight")
-        plt.close()
-        
+                
     def correlate_similarity_with_outcomes(self, similarities, indep_var, dataset_name='test_data', gen_scatterplot=True):
         """
         Correlate similarity values with independent variables and calculate confidence intervals.
@@ -622,7 +637,7 @@ class LOOCVAnalyzer(ConvergentMapGenerator):
 
 class CorrelationAnalysis:
     """
-    A class to perform correlation analysis on neuroimaging data.
+    A class to perform convergent correlation analysis on neuroimaging data.
     
     Attributes:
     -----------
@@ -666,12 +681,14 @@ class CorrelationAnalysis:
     calculate_pairwise_p_values(method='two_tail', max_stat=False):
         Calculates pairwise p-values, with an option for maximum statistic correction.
     datasets_to_flip: 
-        list of dataset names. if detected, will flip multiply correlation map by -1.
+        list of dataset names. if detected, will flip multiply correlation map by -1. Use this to manually align maps to a similar topology. 
+    topology_command:
+        string. set topology_command to one of: None | 'r2' | 'absval'. This method is applied to maps before measuring similarity.
     run():
         Runs the entire correlation analysis process and returns the p-value and pairwise p-values.
     """
     
-    def __init__(self, data_dict_path, method='pearson', n_permutations=1000, out_dir=None, use_jax=False, datasets_to_flip=[]):
+    def __init__(self, data_dict_path, method='pearson', n_permutations=1000, out_dir=None, use_jax=False, datasets_to_flip=[], topology_command=None):
         self.data_dict_path = data_dict_path
         self.method = method
         self.n_permutations = n_permutations
@@ -682,12 +699,28 @@ class CorrelationAnalysis:
         self.permuted_similarity_tensor = None
         self.use_jax = use_jax
         self.datasets_to_flip = datasets_to_flip
+        self.topology_command = topology_command
         self.correlation_calculator = CorrelationCalculator(method=method, verbose=False, use_jax=self.use_jax)
         self.data_loader = DataLoader(self.data_dict_path)
 
-    def generate_correlation_maps(self, permute=False):
+    def generate_correlation_maps(self, permute=False, datasets_list=[]):
+        """
+        Generates correlation maps for the specified datasets.
+        Args:
+            permute (bool, optional): If True, permutes the independent variable before 
+                calculating correlations. Defaults to False.
+            dataset_list (list, optional): List of dataset names to process. If empty, 
+                all datasets in `data_loader.dataset_paths_dict` are used. Defaults to [].
+        Returns:
+            dict: A dictionary where keys are dataset names and values are the 
+                corresponding correlation maps.
+        """
+        
+        if datasets_list == []:
+            datasets_list = self.data_loader.dataset_paths_dict.keys()
+    
         corr_map_dict = {}
-        for dataset_name in self.data_loader.dataset_paths_dict.keys():
+        for dataset_name in datasets_list:
             if self.method == 'pearson':
                 data = self.data_loader.load_dataset(dataset_name)
             elif self.method =='spearman':
@@ -700,7 +733,33 @@ class CorrelationAnalysis:
                 self.correlation_calculator.correlation_map *= -1
             corr_map_dict[dataset_name] = self.correlation_calculator.correlation_map
         return corr_map_dict
+    
+    def align_spatial_correlation(self, similarity_matrix):
+        """
+        Align the spatial correlation values of each r,c pair in the given array
+        to the value at index (0,0). If the correlation is negative relative to (0,0),
+        multiply it by -1.
 
+        Parameters:
+        -----------
+        similarity_matrix : np.ndarray
+            The similarity matrix to align.
+
+        Returns:
+        --------
+        np.ndarray
+            The aligned similarity matrix.
+        """
+        reference_value = similarity_matrix[0, 0]
+        aligned_matrix = similarity_matrix.copy()
+
+        for i in range(similarity_matrix.shape[0]):
+            for j in range(similarity_matrix.shape[1]):
+                if np.sign(similarity_matrix[i, j]) != np.sign(reference_value):
+                    aligned_matrix[i, j] *= -1
+
+        return aligned_matrix
+    
     def calculate_similarity_matrix(self, corr_map_dict):
         dataset_names = list(corr_map_dict.keys())
         n = len(dataset_names)
@@ -714,41 +773,26 @@ class CorrelationAnalysis:
                 mx_1 = self.correlation_calculator._check_for_nans(mx_1, nanpolicy='remove', verbose=False)
                 mx_2 = self.correlation_calculator._check_for_nans(mx_2, nanpolicy='remove', verbose=False)
 
-                # if self.method == 'pearson' and self.spcorr_method == 'pearson':
-                    # if self.use_jax:
-                    #     similarity = _calculate_pearson_r_map_jax(mx_1, mx_2)[0][0]
-                    # else:
-                        # similarity, _ = pearsonr(mx_1, mx_2) 
-                # elif self.method == 'spearman':
-                #     if self.use_jax:
-                #         mx_1 = _rankdata_jax(mx_1[:, np.newaxis])
-                #         mx_2 = _rankdata_jax(mx_2[:, np.newaxis])
-                #         similarity = _calculate_pearson_r_map_jax(mx_1, mx_2)[0][0]
-                #     else:
-                #         similarity, _ = spearmanr(mx_1, mx_2)
-                similarity, _ = pearsonr(mx_1, mx_2) 
+                if self.topology_command is None:
+                    similarity, _ = pearsonr(mx_1, mx_2) 
+                elif self.topology_command == 'r2':
+                    similarity, _ = pearsonr(np.square(mx_1), np.square(mx_2)) 
+                elif self.topology_command == 'absval':
+                    similarity, _ = pearsonr(np.abs(mx_1), np.abs(mx_2)) 
+                elif self.topology_command == 'aligned':
+                    similarity, _ = pearsonr(self.align_spatial_correlation(mx_1), self.align_spatial_correlation(mx_2))
+                else:
+                    raise ValueError(f"Error: {self.topology_command} not recognized. Please set topology_command to one of: None | 'r2' | 'absval'.")
                 similarity_matrix[i, j] = similarity
                 similarity_matrix[j, i] = similarity
 
         return similarity_matrix
 
-    def repeat_permutation_process(self):
-        self.corr_map_dict = self.generate_correlation_maps(permute=False)
-        self.original_similarity_matrix = self.calculate_similarity_matrix(self.corr_map_dict)
-        
-        n = len(self.corr_map_dict)
-        self.permuted_similarity_tensor = np.zeros((self.n_permutations, n, n))
-        
-        for i in tqdm(range(self.n_permutations), desc='Running permutations'):
-            permuted_corr_map_dict = self.generate_correlation_maps(permute=True)
-            permuted_similarity_matrix = self.calculate_similarity_matrix(permuted_corr_map_dict)
-            self.permuted_similarity_tensor[i] = permuted_similarity_matrix
-
-    def save_results(self):
+    def save_results(self, prefix=''):
         if self.out_dir:
             os.makedirs(self.out_dir, exist_ok=True)
-            np.save(f'{self.out_dir}/original_similarity_matrix.npy', self.original_similarity_matrix)
-            np.save(f'{self.out_dir}/permuted_similarity_tensor.npy', self.permuted_similarity_tensor)
+            np.save(f'{self.out_dir}/{prefix}original_similarity_matrix.npy', self.original_similarity_matrix)
+            np.save(f'{self.out_dir}/{prefix}permuted_similarity_tensor.npy', self.permuted_similarity_tensor)
 
     def calculate_p_value(self, method='two_tail', absolute_similarity=True):
         """
@@ -822,26 +866,6 @@ class CorrelationAnalysis:
             print("Pairwise P-values")
             print(p_val_mx)
         return p_val_mx
-
-    def run(self, tails='two_tail', fwe=False, verbose=False):
-        self.repeat_permutation_process()
-        self.save_results()
-        
-        if tails == 'two_tail':
-            print('Calculating two-tailed p-values')
-        elif tails == 'one_tail':
-            print('Calculating one-tailed p-values')
-        else:
-            raise ValueError('Invalid method. Please choose either "one_tail" or "two_tail".')
-        
-        p_value, observed_avg = self.calculate_p_value(tails)
-        pairwise_p_values = self.calculate_pairwise_p_values(tails, fwe)
-        if verbose:
-            print('Similarity Matrix: ')
-            print(self.original_similarity_matrix)
-        print(f"Overall p-value: {p_value}")
-        self.p_value = p_value; self.observed_average = observed_avg
-        return p_value, pairwise_p_values
     
     def matrix_heatmap(self, similarity_matrix, type='similarity', mask_half=False, output_path=None, limit=None):
         # Possibly mask the upper half
@@ -915,6 +939,159 @@ class CorrelationAnalysis:
             plt.savefig(os.path.join(output_path, f'similarity-{self.observed_average}_p-{self.p_value}_{output_file}'))
         plt.show()
         return limit
+    
+    def perform_permutation_testing(self, datasets_list=[]):
+        if datasets_list == []:
+            datasets_list = self.data_loader.dataset_paths_dict.keys()
+            
+        self.corr_map_dict = self.generate_correlation_maps(permute=False, datasets_list=datasets_list)
+        self.original_similarity_matrix = self.calculate_similarity_matrix(self.corr_map_dict)
+        
+        n = len(self.corr_map_dict)
+        self.permuted_similarity_tensor = np.zeros((self.n_permutations, n, n))
+        
+        for i in tqdm(range(self.n_permutations), desc='Running permutations'):
+            permuted_corr_map_dict = self.generate_correlation_maps(permute=True, datasets_list=datasets_list)
+            permuted_similarity_matrix = self.calculate_similarity_matrix(permuted_corr_map_dict)
+            self.permuted_similarity_tensor[i] = permuted_similarity_matrix
+
+    def run(self, tails='two_tail', fwe=False, verbose=False):
+        self.perform_permutation_testing()
+        self.save_results()
+        
+        if tails == 'two_tail':
+            print('Calculating two-tailed p-values')
+        elif tails == 'one_tail':
+            print('Calculating one-tailed p-values')
+        else:
+            raise ValueError('Invalid method. Please choose either "one_tail" or "two_tail".')
+        
+        p_value, observed_avg = self.calculate_p_value(tails)
+        pairwise_p_values = self.calculate_pairwise_p_values(tails, fwe)
+        if verbose:
+            print('Similarity Matrix: ')
+            print(self.original_similarity_matrix)
+        print(f"Overall p-value: {p_value}")
+        self.p_value = p_value; self.observed_average = observed_avg
+        return p_value, pairwise_p_values
+    
+    def run_lofo(self, folds, tails='two_tail', verbose=False):
+        """
+        Perform Leave-One-Out Cross-Validation (LOOCV) using the provided array of lists.
+    
+        Parameters:
+        -----------
+        folds : list of lists
+            An array of lists, where each list contains dataset names to fold out.
+            Example: [['dataset1'], ['dataset2'], ['dataset3']] for LOOCV.
+        tails : {'one_tail', 'two_tail'}, optional
+            Method to calculate p-values. Default is 'two_tail'.
+        verbose : bool, optional
+            Whether to print detailed logs. Default is False.
+    
+        Returns:
+        --------
+        pd.DataFrame
+            A DataFrame containing the LOOCV results, including R-values and confidence intervals.
+        """    
+        for fold_idx, test_datasets in enumerate(folds):
+            if verbose:
+                print(f"Running LOOCV fold {fold_idx + 1}/{len(folds)} with test datasets: {test_datasets}")
+    
+            # Step 1: Split datasets into training and testing sets
+            train_datasets = [ds for ds in self.data_loader.dataset_paths_dict.keys() if ds not in test_datasets]
+    
+            # Step 2: Run Permutation Process on Training Datasets
+            self.perform_permutation_testing(datasets_list=train_datasets)
+            
+            if tails == 'two_tail':
+                print('Calculating two-tailed p-values')
+            elif tails == 'one_tail':
+                print('Calculating one-tailed p-values')
+            else:
+                raise ValueError('Invalid method. Please choose either "one_tail" or "two_tail".')
+            
+            p_value, observed_avg = self.calculate_p_value(method=tails)
+            pairwise_p_values = self.calculate_pairwise_p_values(method=tails, max_stat=False)
+
+            print(f"  Left Out Dataset: {test_datasets}")
+            print(f"    P-value: {p_value:.4f}")
+            print(f"    Observed Average Similarity: {observed_avg:.4f}")
+            print(f"    Pairwise P-values:")
+            for j, train_dataset in enumerate(train_datasets):
+                print(f"      {train_dataset}: {pairwise_p_values[j, j]:.4f}")
+            prefix = '_'.join(train_datasets) + '_'
+            self.save_results(prefix=prefix)
+    
+    @staticmethod
+    def calculate_slice_p_value(
+        observed_matrix,
+        permuted_tensor,
+        row_indices,
+        col_indices,
+        method='two_tail',
+        absolute_similarity=True,
+        remove_diagonal=True
+    ):
+        """
+        Compute the p-value for a submatrix (slice) of the similarity matrix.
+
+        Parameters
+        ----------
+        observed_matrix : np.ndarray
+            The original NxN similarity matrix (2D).
+        permuted_tensor : np.ndarray
+            The permuted similarity tensor of shape (num_permutations, N, N).
+        row_indices : array-like
+            Indices of rows to include in the slice.
+        col_indices : array-like
+            Indices of columns to include in the slice.
+        method : {'two_tail','one_tail'}, optional
+            - 'two_tail': checks if the absolute permuted average is greater than the absolute observed average.
+            - 'one_tail': checks if the permuted average is greater than the observed average.
+        absolute_similarity : bool, optional
+            If True, takes the absolute value of the similarities before computing.
+        remove_diagonal : bool, optional
+            If True and row_indices == col_indices, sets the diagonal in that sub-slice to NaN before computing.
+
+        Returns
+        -------
+        p_value : float
+            The proportion of permutations whose average in the specified slice
+            exceeds the observed average (two-tail uses absolute values).
+        observed_avg : float
+            The mean similarity value in this slice of the observed matrix.
+        """
+
+        # 1) Extract submatrices
+        sub_obsv = observed_matrix[np.ix_(row_indices, col_indices)]
+        sub_perm = permuted_tensor[:, row_indices][:, :, col_indices]
+
+        # 2) Optionally remove diagonal if slice is square
+        if remove_diagonal and (set(row_indices) == set(col_indices)):
+            diag_mask_sub = ~np.eye(len(row_indices), dtype=bool)
+            sub_obsv = sub_obsv * diag_mask_sub
+            sub_perm = sub_perm * diag_mask_sub[None, :, :]
+
+        # 3) Apply absolute value if needed
+        if absolute_similarity:
+            sub_obsv = np.abs(sub_obsv)
+            sub_perm = np.abs(sub_perm)
+
+        # 4) Compute averages
+        observed_avg = np.nanmean(sub_obsv)
+        permuted_avg = np.nanmean(sub_perm, axis=(1, 2))
+
+        # 5) Calculate p-value
+        if method == 'two_tail':
+            p_value = np.mean(np.abs(permuted_avg) > np.abs(observed_avg))
+        elif method == 'one_tail':
+            p_value = np.mean(permuted_avg > observed_avg)
+        else:
+            raise ValueError('method must be either "one_tail" or "two_tail"')
+
+        return p_value, observed_avg
+
     
 ### GENERAL NIFTI FUNCTIONS ###
                     

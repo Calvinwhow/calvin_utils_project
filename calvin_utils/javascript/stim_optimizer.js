@@ -331,10 +331,6 @@ const projectConstraints = (v, maxTotal = 5) => {
     return final; //percentage current scaled to max allowed current 
 }
 
-const projectAmpConstrains = (v, maxPer = 5) => {
-    return v.map(component => Math.min(component, maxPer));
-};
-
 /**
  * This function takes the max number of allowed contacts and the currect contact values. 
  * It then selects the combination of N (max number) contacts which optimize Loss.
@@ -355,7 +351,15 @@ const projectNumContacts = (sphereCoords, v, numContacts, L, lambda=1) => {
     const selectedIndices = losses.slice(0, numContacts).map(entry => entry.idx);                           // Top numContacts losses are selected
     const mask = v.map((_, idx) => selectedIndices.includes(idx) ? 1 : 0);                                  // Create a mask for selected contacts
     const projectedV = v.map((val, idx) => mask[idx] * val);                                                // Apply mask to threshold v back to constraints   
-    return projectedV;
+    const minThreshold = 2;
+    const adjustedV = projectedV.map(value => Math.max(value, minThreshold));
+    return adjustedV;
+}
+
+
+// to be called 
+const projectAmpConstraints = (ampArray, minPer = 1) => {
+    return ampArray.map(amp => Math.max(amp, minPer));
 }
 
 // -----------------------------

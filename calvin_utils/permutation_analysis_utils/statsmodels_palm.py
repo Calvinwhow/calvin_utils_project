@@ -45,7 +45,7 @@ class CalvinStatsmodelsPalm(CalvinPalm):
     #     if y.shape[1] == 2:         # remove second column in binomial case
     #         y = y.iloc[:,[0]]
     #     return y, X
-    def define_design_matrix(self, formula, data_df, voxelwise_variable_list=None, coerce_str=False):
+    def define_design_matrix(self, formula, data_df, voxelwise_variable_list=None, coerce_str=False, add_intercept=True):
         """
         Defines the design matrix while ensuring voxelwise variables are not expanded into dummies.
 
@@ -90,6 +90,9 @@ class CalvinStatsmodelsPalm(CalvinPalm):
         
         if y.shape[1] == 2:  # Remove second column in binomial case
             y = y.iloc[:, [0]]
+            
+        if add_intercept==False:
+            X.pop('Intercept')
 
         return y, X
 

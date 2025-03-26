@@ -8,11 +8,12 @@ from time import time
 class NiftiOptimizer:
     def __init__(self, corr_map_dict, data_loader, load_in_time=True):
         self.data_loader = data_loader
+        self.best_loss = 0
         self.corr_map_names = [k for k in corr_map_dict.keys()]
         self.corr_map_dict = self._handle_nans(corr_map_dict)
         self.W = self._initialize_weights(weighted=False)
         self.MAPS = self._initialize_maps(self.corr_map_dict)
-        
+        self.iter_maps = []
         self.datasets = self._init_data(load_in_time)
         self._readout()
         self.converged = False
@@ -42,7 +43,7 @@ class NiftiOptimizer:
                 data = self.data_loader.load_dataset(k)
                 weights.append(data['niftis'].shape[0])
             else:
-                weights.append(np.random.normal(1,.2)) #provide near-equal weighting using RNG
+                weights.append(np.random.normal(1, 1)) #provide near-equal weighting using RNG
         weights = np.array(weights)
         weights = np.reshape(weights, (1, len(weights)))
         return weights / np.sum(weights)
@@ -146,7 +147,7 @@ class NiftiOptimizer:
         T = self._target_function(RHO_ARR)
         P1 = self._penalty_all_weights()
         P2 = self._pentalty_per_weight()
-        return T - P1 #- P2
+        return T #- P1 #- P2
 
     def _orchestrate_loss(self, W=None, verbose=False):
         # step 1 - generate convergent map  
@@ -164,12 +165,14 @@ class NiftiOptimizer:
         return (LOSS_FWD - LOSS) / h
     
     def _clip_gradient(self, GRADIENT):
-        return np.clip(GRADIENT, a_min=-0.05, a_max=0.05)
+        return np.clip(GRADIENT, a_min=-0.5, a_max=0.5)
         
     def _orchestrate_gradient(self, LOSS, h):
         '''For each weight, perturb it and get the loss.'''
         GRADIENT = np.zeros((self.W.shape[0], self.W.shape[1]))           # shape (1, n_vars)
         H_MATRIX = np.eye(self.W.shape[1], self.W.shape[1])               # shape (n_vars, n_vars)
+        H_MATRIX = H_MATRIX * h                                           # Set up jacobian-style perturbation matrix
+        
         for i in range(self.W.shape[1]):
             W_H = self.W + H_MATRIX[i, :]                                 # shape (1, n_vars)
             GRADIENT[0, i] = self._partial_difference_quotient(LOSS, h, W_H)
@@ -177,7 +180,20 @@ class NiftiOptimizer:
         GRADIENT = self._clip_gradient(GRADIENT)
         return GRADIENT
     
-    def optimize(self, h=0.001, verbose=False):
+    def _tanh_normalize(self, W):
+        tanh_W = np.tanh(W)  # outputs between -1 and 1
+        return tanh_W / np.sum(np.abs(tanh_W))
+    
+    def _linear_normalize(self, W):
+        return W / np.sum(W)
+    
+    def _store_best_params(self, LOSS, W):
+        '''Keep best performing results in-memory'''
+        if LOSS > self.best_loss:
+            self.best_loss = LOSS
+            self.best_weights = W
+
+    def optimize(self, h=0.001, verbose=False, store_iters=False, store_best=False):
         '''
         Gets loss
         Gets gradient
@@ -191,8 +207,12 @@ class NiftiOptimizer:
             LOSS = self._orchestrate_loss(verbose=verbose)
             GRADIENT = self._orchestrate_gradient(LOSS=LOSS, h=h)
             self.W = self.adam.step(gradient=GRADIENT)
-            self.W = self.W / np.sum(self.W)                # normalize weights back to -1 1
+            self.W = self._tanh_normalize(self.W)
             self.converged = self.convergence_monitor.check_convergence(weights=self.W, gradient=GRADIENT, loss=LOSS)
+            if store_best:
+                self._store_best_params(LOSS, self.W)
+            if store_iters: 
+                self.iter_maps.append(self._converge_maps())
         return self._converge_maps()
 
 class AdamOptimizer:
@@ -256,7 +276,7 @@ class ConvergenceMonitor:
         self.prev_loss = loss
         self.loss_history.append(loss)
         
-        if self.iterations < 50:
+        if self.iterations < 25:
             return False
         
         # Check iterations

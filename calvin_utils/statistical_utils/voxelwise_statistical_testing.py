@@ -14,7 +14,7 @@ from tqdm import tqdm
 import numpy as np
 import pandas as pd 
 import nibabel as nib
-from nimlab import datasets as nimds
+# from nimlab import datasets as nimds
 
 from calvin_utils.nifti_utils.matrix_utilities import unmask_matrix, mask_matrix
 from sklearn.linear_model import LinearRegression

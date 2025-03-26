@@ -46,11 +46,28 @@ class CSVComposer:
 
                 # Extract covariate values
                 for cov_name, col_name in params.get('covariate_col', {}).items():
-                    row_data[cov_name] = self._extract_covariate_value(csv_data, sub_idx, col_name)
+                    row_data[cov_name] = self._extract_covariate_value(csv_data, sub_idx, col_name, infill_colname=True)
 
                 all_rows.append(row_data)
 
         self.composed_df = pd.DataFrame(all_rows)
+    
+    def _extract_covariate_value(self, df, row_filter, col_name, infill_colname=True):
+        """
+        Safely extract a single covariate value.
+        If the column doesn't exist or there's no value, return a specific string.
+        """
+        if col_name not in df.columns:
+            return col_name
+
+        selected_vals = df.loc[row_filter, col_name]
+        if not selected_vals.empty: 
+            return selected_vals.values[0]
+        else:
+            if infill_colname: 
+                return f"Value for '{col_name}' not found"
+            else: 
+                return f"Missing value for '{col_name}'"
 
     def _format_subject_id(self, subject_id):
         """Ensure subject ID is a string and handle NaNs."""
@@ -66,7 +83,6 @@ class CSVComposer:
         E.g., subject_id='4' should match 'sub-4' but not 'sub-40'.
         """
         pattern = re.compile(re.escape('sub-' + subject_id) + r'(?!\d)')
-
         matches = [path for path in nifti_paths if pattern.search(path)]
         return matches
     
@@ -103,21 +119,6 @@ class CSVComposer:
                 nifti_paths.remove(matches[0])
                 return matches[0]
         return ''
-
-    def _extract_covariate_value(self, df, row_filter, col_name, infill_colname=True):
-        """
-        Safely extract a single covariate value.
-        If the column doesn't exist or there's no value, return None.
-        """
-        if col_name not in df.columns:
-            return None
-
-        selected_vals = df.loc[row_filter, col_name]
-        if not selected_vals.empty: 
-            return selected_vals.values[0]
-        else:
-            if infill_colname: return col_name
-            else: return None
 
     def save_csv(self, output_csv_path):
         """

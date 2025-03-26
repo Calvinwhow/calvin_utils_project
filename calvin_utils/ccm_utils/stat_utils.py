@@ -187,102 +187,92 @@ class CorrelationCalculator:
                 print('flipping')
                 corr_map_dict[dataset_name] = corr_map_dict[dataset_name] * -1
         return corr_map_dict
-
+    
 class MetaConvergenceForestPlot:
     """
-    This class takes a DataFrame containing meta-convergence data and generates a forest plot
-    to visualize the confidence intervals and mean R values for each dataset.
+    Class for generating and saving a forest plot visualizing meta-convergence data.
 
     Parameters:
     -----------
     data : pd.DataFrame
-        DataFrame containing the meta-convergence data with columns 'Dataset', 'CI Lower', 'CI Upper', and 'Mean R'.
+        DataFrame with columns: 'Dataset', 'CI Lower', 'CI Upper', and 'Mean R'.
     sig_digits : int, optional
-        Number of significant digits to display in the forest plot (default: 2).
+        Number of significant digits displayed (default: 2).
     out_dir : str, optional
-        Directory path where the plot should be saved (default: None).
+        Directory path for saving the plot (default: None).
     table : bool, optional
-        Flag to indicate whether the plot should be displayed as a table (default: False).
+        Whether to format the plot as a table (default: False).
     """
 
     def __init__(self, data, sig_digits=2, out_dir=None, table=False):
-        self.data = data
+        self.data = data.copy()
         self.sig_digits = sig_digits
         self.out_dir = out_dir
         self.table = table
 
-    def table_prep(self):
+    def _prepare_table_data(self, min_rows=2):
         """
-        If we want to use a table with less than 6 regressors, the table output will be malformed.
-        To address this, we fill the bottom of the self.data_for_plot DataFrame with np.NaN
-        to expand over 6 rows.
+        Ensures DataFrame has a minimum number of rows by padding with NaNs if necessary.
         """
-        if self.table and len(self.data) < 7:
-            additional_rows_needed = 7 - len(self.data)
-            
-            # Create a DataFrame with the additional rows filled with np.NaN
-            additional_rows = pd.DataFrame({
-                'Mean R': [np.NaN] * additional_rows_needed,
-                'CI Lower': [np.NaN] * additional_rows_needed,
-                'CI Upper': [np.NaN] * additional_rows_needed,
-                'Dataset': [''] * additional_rows_needed  # Assuming label can remain as an empty string
+        current_row_count = len(self.data)
+        if self.table and current_row_count < min_rows:
+            rows_to_add = min_rows - current_row_count
+            padding_df = pd.DataFrame({
+                'Mean R': [1] * rows_to_add,
+                'CI Lower': [1] * rows_to_add,
+                'CI Upper': [1] * rows_to_add,
+                'Dataset': ['(placeholder)'] * rows_to_add
             })
+            self.data = pd.concat([self.data, padding_df], ignore_index=True)
 
-            # Append the additional rows to the data DataFrame
-            self.data = pd.concat([self.data, additional_rows], ignore_index=True)
-
-    def create_and_display_forest_plot(self, x_label="Mean R", estimate="Mean R", varlabel="Dataset", ll="CI Lower", hl="CI Upper"):
+    def create_forest_plot(self, x_label="Mean R", estimate_col="Mean R",
+                            varlabel_col="Dataset", ll_col="CI Lower", hl_col="CI Upper"):
         """
-        Generate and display a forest plot from the meta-convergence data using forestplot.py.
+        Creates and displays the forest plot.
         """
-        # Generate the forest plot
-        ax = fp.forestplot(dataframe=self.data,
-                # Necessary inputs
-                estimate=estimate,  # Column containing estimated effect size 
-                varlabel=varlabel,  # Column containing variable label
-                
-                # Additional Plotting Inputs
-                ll=ll, hl=hl,  # Columns containing conf. int. lower and higher limits
-                
-                # Axis Labels
-                xlabel=x_label,
-                ylabel='Est.(95% Conf. Int.)',
-                
-                # Forest Plot Configuration
-                decimal_precision=self.sig_digits,
-                capitalize='capitalize',
-                color_alt_rows=False,  # Gray alternate rows
-                table=self.table,
-                flush=False,
-                
-                # Image Configuration
-                **{"marker": "D",  # Set marker symbol as diamond
-                    "markersize": 150,  # Adjust marker size
-                    "xlinestyle": (0, (10, 5)),  # Long dash for x-reference line 
-                    "xlinecolor": "#808080",  # Gray color for x-reference line
-                    "xtick_size": 12,  # Adjust x-ticker fontsize
-                    'fontfamily': 'helvetica'
-                    }  
-            )
+        ax = fp.forestplot(
+            dataframe=self.data,
+            estimate=estimate_col,
+            varlabel=varlabel_col,
+            ll=ll_col,
+            hl=hl_col,
+            xlabel=x_label,
+            ylabel='Est. (95% Conf. Int.)',
+            decimal_precision=self.sig_digits,
+            capitalize='capitalize',
+            color_alt_rows=False,
+            table=self.table,
+            flush=False,
+            **{
+                "marker": "D",
+                "markersize": 150,
+                "xlinestyle": (0, (10, 5)),
+                "xlinecolor": "#808080",
+                "xtick_size": 12,
+                "fontfamily": "helvetica"
+            }
+        )
         self.fig = ax.figure
         self.fig.show()
-        
-    def figure_saver(self, title="meta_convergence_forest_plot"):
+
+    def save_plot(self, filename="meta_convergence_forest_plot"):
         """
-        Method to save the forest plot.
+        Saves the forest plot in PNG and SVG formats.
         """
-        # Save the plot as PNG and SVG
-        os.makedirs(self.out_dir+'/forest_plots', exist_ok=True)
-            
         if self.out_dir:
-            self.fig.savefig(os.path.join(self.out_dir, f"forest_plots/{title}.png"), bbox_inches='tight')
-            self.fig.savefig(os.path.join(self.out_dir, f"forest_plots/{title}.svg"), bbox_inches='tight')
-            print(f'Saved to {self.out_dir} as {title}.svg and .png')
-            
+            output_path = os.path.join(self.out_dir, 'forest_plots')
+            os.makedirs(output_path, exist_ok=True)
+            for ext in ['png', 'svg']:
+                full_path = os.path.join(output_path, f"{filename}.{ext}")
+                self.fig.savefig(full_path, bbox_inches='tight')
+            print(f'Saved plot as {filename}.png and {filename}.svg in {output_path}')
+
     def run(self):
         """
-        Orchestrator method.
+        Executes the full pipeline for generating and saving the forest plot.
         """
-        self.table_prep()
-        self.create_and_display_forest_plot()
-        self.figure_saver()
+        self._prepare_table_data()
+        self.create_forest_plot()
+        self.save_plot()
+
+        
