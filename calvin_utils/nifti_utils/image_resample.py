@@ -3,10 +3,10 @@ import numpy as np
 import nibabel as nib
 from scipy.spatial import KDTree
 
-class ImageResampler:
+class ImageDownSampler:
     """
-    A robust image resampling utility that can downsample images to a specified 
-    resolution, either relative to a template or by a direct approach.
+    A robust image downsampling utility. Works either 
+    relative to a template or by a direct approach.
     
     Note:
     This class gets the grid of values in the origin space and calculates the real (mm) location of each voxel. 
