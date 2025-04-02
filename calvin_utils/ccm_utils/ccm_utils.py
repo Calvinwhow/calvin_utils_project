@@ -312,20 +312,13 @@ class LOOCVAnalyzer(ConvergentMapGenerator):
         return taining_dataset_list
 
     def perform_loocv(self):
-        """
-        Perform Leave-One-Out Cross-Validation (LOOCV) analysis.
-
-        Returns:
-        --------
-        list of tuple
-            List of tuples containing the R-value and confidence intervals for each dataset.
-        """
+        """Perform Leave-One-Out Cross-Validation (LOOCV) analysis."""
         results = []
         dataset_names = list(self.corr_map_dict.keys())
         for i, test_dataset_name in enumerate(dataset_names):
+           
             # Load the training dataset
-            print("Evaluating dataset:", test_dataset_name)
-            train_dataset_names = self._prepare_train_dataset(i, dataset_names, test_dataset_name)            
+            train_dataset_names = self._prepare_train_dataset(i, dataset_names, test_dataset_name)    
             
             # Load the test dataset
             test_data = self.data_loader.load_dataset(test_dataset_name)
@@ -341,9 +334,13 @@ class LOOCVAnalyzer(ConvergentMapGenerator):
             if self.roi_path is not None:
                 convergent_map = self.generate_convergent_roi()
             elif self.similarity == 'spatial_correl':
+                print("Training on: ", train_dataset_names)
+                print("Testing on held-out datset: ", test_dataset_name)
                 local_corr_map_dict = self.generate_correlation_maps(train_dataset_names)
                 convergent_map = self.generate_weighted_average_r_map(local_corr_map_dict)
             elif self.similarity == 'cosine':
+                print("Training on: ", train_dataset_names)
+                print("Testing on held-out datset: ", test_dataset_name)
                 local_corr_map_dict = self.generate_correlation_maps(train_dataset_names)
                 convergent_map = self.generate_agreement_map(local_corr_map_dict)
             else:
@@ -485,7 +482,7 @@ class LOOCVAnalyzer(ConvergentMapGenerator):
         else:
             return ci_lower, ci_upper, data[0]
 
-    def _generate_scatterplot(self, similarities, indep_var, dataset_name):
+    def _generate_scatterplot(self, similarities, indep_var, dataset_name, flip_axes=False):
         """
         Generate and save a scatterplot of similarity vs. outcome with Spearman correlation.
 
@@ -497,27 +494,55 @@ class LOOCVAnalyzer(ConvergentMapGenerator):
             Array of independent variable values (Y-axis).
         dataset_name : str
             Name of the dataset (used for title and filename).
+        flip_axes : bool
+            Plot X on Y and Y on X. 
         """
+        
         rho, p = spearmanr(similarities, indep_var)
         r, pr = pearsonr(similarities, indep_var)
 
         # Create DataFrame for Seaborn
         df = pd.DataFrame({"Similarity": similarities, "Outcome": indep_var})
         xlab = 'Cosine Similarity' if self.similarity == 'cosine' else 'Spatial Correlation'
-
         # Create LM plot
-        plt.figure(figsize=(4, 4))
-        sns.lmplot(data=df, x="Similarity", y="Outcome", height=4, aspect=1, scatter_kws={'alpha': 0.5})
+        plt.figure(figsize=(6, 6))
+        if flip_axes:
+            sns.lmplot(data=df, x="Outcome", y="Similarity", height=6, aspect=1, 
+               scatter_kws={'alpha': 0.98, 'color': '#8E8E8E', 's': 150, 'edgecolors': 'white', 'linewidth': 2, 'zorder': 3}, 
+               line_kws={'color': '#8E8E8E', 'zorder': 2})
+        else:
+            sns.lmplot(data=df, x="Similarity", y="Outcome", height=6, aspect=1, 
+               scatter_kws={'alpha': 0.98, 'color': '#8E8E8E', 's': 150, 'edgecolors': 'white', 'linewidth': 2, 'zorder': 3}, 
+               line_kws={'color': '#8E8E8E', 'zorder': 2})
 
-        # Title with rho, p-value, and dataset name
-        plt.title(f"{dataset_name}: Spearman ρ = {rho:.2f}, p = {p:.2e} \n Pearson r = {r:.2f}, p = {pr:.2e}")
-        plt.xlabel(xlab)
-        plt.ylabel("Outcome")
+        # Title with dataset name
+        plt.title(f"{dataset_name}", fontsize=20)
+        plt.xlabel(xlab, fontsize=20)
+        plt.ylabel("Outcome", fontsize=20)
+
+        # Dynamically place stats inside the plot
+        x_pos = 0.05 if rho > 0 else 0.05
+        y_pos = 0.95 if rho > 0 else 0.15
+        plt.text(
+            x_pos, y_pos, 
+            f"Rho = {rho:.2f}, p = {p:.2e}\nR = {r:.2f}, p = {pr:.2e}",
+            fontsize=16, 
+            transform=plt.gca().transAxes, 
+            verticalalignment='top', 
+            bbox=dict(facecolor='white', alpha=0, edgecolor='none')
+        )
+        
+        # Set font sizes and line thickness for the scatterplot
+        ax = plt.gca()
+        ax.tick_params(axis='both', labelsize=16)
+        for spine in ax.spines.values():
+            spine.set_linewidth(2)
 
         # Save plot
         os.makedirs(self.out_dir+'/scatterplots', exist_ok=True)
-        plt.show()
         plt.savefig(os.path.join(self.out_dir, f"scatterplots/{dataset_name}_scatterplot.svg"), bbox_inches="tight")
+        plt.show()
+        
                 
     def correlate_similarity_with_outcomes(self, similarities, indep_var, dataset_name='test_data', gen_scatterplot=True):
         """
@@ -634,6 +659,97 @@ class LOOCVAnalyzer(ConvergentMapGenerator):
         # 3. Return a one-row-per-group DataFrame
         return pd.DataFrame(rows, columns=['Dataset', 'CI Lower', 'CI Upper', 'Mean R'])
 
+    def _shuffle_for_roi_comparison(self, niftis, indep_var, method):
+        if method == "bootstrap":
+            idx = np.random.choice(len(niftis), size=len(niftis), replace=True)
+        elif method == "permutation":
+            idx = np.arange(len(niftis))
+            np.random.shuffle(idx)
+        elif method =="observed":
+            idx = np.arange(len(niftis))
+        else:
+            raise ValueError("Invalid method. Please choose 'bootstrap' or 'permutation'.")
+        sub_niftis = niftis[idx]
+        sub_indep_var = indep_var[idx].flatten()
+        return sub_niftis, sub_indep_var
+    
+    def _compute_r_differences(self, roi1_map, roi2_map, dataset_names, method, n_iter, delta_r2):
+        all_r_diffs = {}
+        for dataset_name in dataset_names:
+            r_diffs = []
+            for _ in tqdm(range(n_iter)):
+                data = self.data_loader.load_dataset(dataset_name)
+                test_niftis = CorrelationCalculator._check_for_nans(data['niftis'], nanpolicy='remove', verbose=False)
+                test_indep_var = CorrelationCalculator._check_for_nans(data['indep_var'], nanpolicy='remove', verbose=False)
+                sub_niftis, sub_indep_var = self._shuffle_for_roi_comparison(test_niftis, test_indep_var, method)
+                if self.similarity == 'cosine':
+                    sim1 = [self.cosine_similarity(n, roi1_map) for n in sub_niftis]; sim2 = [self.cosine_similarity(n, roi2_map) for n in sub_niftis]
+                else:
+                    sim1 = [pearsonr(n.flatten(), roi1_map.flatten())[0] for n in sub_niftis]; sim2 = [pearsonr(n.flatten(), roi2_map.flatten())[0] for n in sub_niftis]
+                    
+                stat1 = pearsonr(sim1, sub_indep_var)[0]; stat2 = pearsonr(sim2, sub_indep_var)[0]
+                if delta_r2:
+                    stat1 = stat1 ** 2; stat2 = stat2 ** 2
+                delta = stat1 - stat2
+                r_diffs.append(delta)
+                for roi, stat in zip(['roi1', 'roi2'], [stat1, stat2]):
+                    self.r_values[roi].append(stat)
+            all_r_diffs[dataset_name] = r_diffs
+        return all_r_diffs
+        
+    def _calculate_probability(self, all_r_diffs, roi1_map, roi2_map, dataset_names, method, delta_r2):
+        """Calculate the probability based on the method (bootstrap or permutation)"""
+        p_vals = {}
+        print(f"Below results used delta explained variance (r-squared): {delta_r2}")
+        if method == "bootstrap":
+            print("Checking the probability that ROI 1 outperforms ROI 2 by comparing # of times it outperformed it in")
+            for dataset_name, diffs in all_r_diffs.items():
+                pval = np.mean(np.array(diffs) > 0)
+                print(f'{dataset_name} \n    -Avg delta value: {np.mean(np.array(diffs))}| Probability Roi 1 is generally superior: {pval}.')
+                p_vals[dataset_name] = pval
+        elif method == "permutation":
+            print("Checking the probability that ROI 1 outperforms ROI 2 using permutation testing.")
+            observed_diffs = self._compute_r_differences(roi1_map, roi2_map, dataset_names, method='observed', n_iter=1, delta_r2=delta_r2)
+            for dataset_name, diffs in all_r_diffs.items():
+                obsv_diff = observed_diffs[dataset_name]
+                pval = np.mean(np.array(diffs) > obsv_diff)
+                print(f'{dataset_name} \n    -delta value: {obsv_diff}| permutation p-value: {pval}.')
+                p_vals[dataset_name] = pval
+            overall_pval = np.mean(np.mean(list(all_r_diffs.values()), axis=1) > np.mean(list(observed_diffs.values())))
+            print(f'Overall permutation p-value: {overall_pval}')
+        else:
+            raise ValueError("method must be 'bootstrap' or 'permutation'")
+        
+        
+        # --- Overall bootstrap p-value and average delta ---
+        if method == "bootstrap":
+            diff_matrix = np.array(list(all_r_diffs.values()))  # shape: (n_datasets, n_iter)
+            mean_diffs = np.mean(diff_matrix, axis=0)           # shape: (n_iter,)
+            overall_pval = np.mean(mean_diffs > 0)
+            print(f"Overall bootstrap:\n    avg delta R = {np.mean(mean_diffs):.4f}, Probability ROI 1 is generally superior = {overall_pval:.4f}")
+
+        # --- Overall permutation p-value and average delta ---
+        elif method == "permutation":
+            observed_mean_diff = np.mean(list(observed_diffs.values()))
+            diff_matrix = np.array(list(all_r_diffs.values()))  # shape: (n_datasets, n_iter)
+            mean_diffs = np.mean(diff_matrix, axis=0)           # shape: (n_iter,)
+            overall_pval = np.mean(mean_diffs > observed_mean_diff)
+            print(f"Overall permutation:\n     observed avg delta R = {observed_mean_diff:.4f}, p = {overall_pval:.4f}")
+        return p_vals
+    
+    def compare_roi_correlations(self, roi1, roi2, method="bootstrap", n_iter=10000, delta_r2=True, seed=None):
+        """Compare the correlation of two ROI maps with outcome variables using bootstrap or permutation test"""
+        dataset_names = list(self.corr_map_dict.keys())
+        self.r_values = {'roi1': [], 'roi2': []}
+        # Load both ROIs and apply the mask
+        self.roi_path = roi1
+        roi1_map = self.generate_convergent_roi()
+        self.roi_path = roi2
+        roi2_map = self.generate_convergent_roi()
+        all_r_diffs = self._compute_r_differences(roi1_map, roi2_map, dataset_names, method, n_iter, delta_r2)
+        self.prob = self._calculate_probability(all_r_diffs, roi1_map, roi2_map, dataset_names, method, delta_r2)
+
+
 
 class CorrelationAnalysis:
     """
@@ -734,7 +850,7 @@ class CorrelationAnalysis:
             corr_map_dict[dataset_name] = self.correlation_calculator.correlation_map
         return corr_map_dict
     
-    def align_spatial_correlation(self, similarity_matrix):
+    def align_spatial_correlation(self, matrix_1, matrix_2):
         """
         Align the spatial correlation values of each r,c pair in the given array
         to the value at index (0,0). If the correlation is negative relative to (0,0),
@@ -742,7 +858,9 @@ class CorrelationAnalysis:
 
         Parameters:
         -----------
-        similarity_matrix : np.ndarray
+        matrix_1 : np.ndarray
+            The similarity matrix to align.
+        matrix_2 : np.ndarray
             The similarity matrix to align.
 
         Returns:
@@ -750,15 +868,11 @@ class CorrelationAnalysis:
         np.ndarray
             The aligned similarity matrix.
         """
-        reference_value = similarity_matrix[0, 0]
-        aligned_matrix = similarity_matrix.copy()
+        r = pearsonr(x=matrix_1, y=matrix_2)[0]
+        if r < 0:
+            matrix_2 = matrix_2 * -1
+        return matrix_1, matrix_2
 
-        for i in range(similarity_matrix.shape[0]):
-            for j in range(similarity_matrix.shape[1]):
-                if np.sign(similarity_matrix[i, j]) != np.sign(reference_value):
-                    aligned_matrix[i, j] *= -1
-
-        return aligned_matrix
     
     def calculate_similarity_matrix(self, corr_map_dict):
         dataset_names = list(corr_map_dict.keys())
@@ -780,7 +894,8 @@ class CorrelationAnalysis:
                 elif self.topology_command == 'absval':
                     similarity, _ = pearsonr(np.abs(mx_1), np.abs(mx_2)) 
                 elif self.topology_command == 'aligned':
-                    similarity, _ = pearsonr(self.align_spatial_correlation(mx_1), self.align_spatial_correlation(mx_2))
+                    mx_1, mx_2 = self.align_spatial_correlation(mx_1, mx_2)
+                    similarity, _ = pearsonr(mx_1, mx_2)
                 else:
                     raise ValueError(f"Error: {self.topology_command} not recognized. Please set topology_command to one of: None | 'r2' | 'absval'.")
                 similarity_matrix[i, j] = similarity

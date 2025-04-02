@@ -332,13 +332,15 @@ class GLMPlot:
             x2: self.data_df[x2],
             **slider_data
         })
-
+        Y_pred = self.model_results.predict(X_pred).values
         # Generate predictions
         Y_pred = self.model_results.predict(X_pred).values
-
-        for idx, row in self.data_df.iterrows():
-            x1_val, x2_val, y_val = row[x1], row[x2], row[outcome]
-            pred_val = Y_pred[idx]
+        print(Y_pred.shape)
+        print(self.data_df.index.shape)
+        assert len(Y_pred) == len(self.data_df.index)
+        
+        for idx, pred_val in enumerate(Y_pred):
+            x1_val, x2_val, y_val = self.data_df.iloc[idx][x1], self.data_df.iloc[idx][x2], self.data_df.iloc[idx][outcome]
 
             # Decode categorical variables for plotting
             x1_val_decoded = self._decode_single_value(x1, x1_val)

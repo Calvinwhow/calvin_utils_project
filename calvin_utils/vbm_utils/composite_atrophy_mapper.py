@@ -2,7 +2,7 @@ import pandas as pd
 from typing import Tuple
 from itertools import combinations
 
-def generate_composite(dataframes_dict: dict, csfgm_only: bool=True, sign_flip_csf: bool=True) -> dict:
+def generate_composite(dataframes_dict: dict, csfgm_only: bool=True, sign_flip_csf: bool=False) -> dict:
     """
     Generates composite DataFrames by combining data from multiple DataFrames in the input dictionary.
     For each combination of two or more DataFrames, creates a new DataFrame by summing their values.
@@ -21,10 +21,12 @@ def generate_composite(dataframes_dict: dict, csfgm_only: bool=True, sign_flip_c
             Each new key contains the sum of the combined DataFrames' values.
     """
     if sign_flip_csf: 
+        print("MULTIPLYING CSF BY -1. NEGATIVE VALUES IN ALL OUTPUTS REPRESENT MORE ATROPHY")
         dataframes_dict['cerebrospinal_fluid'] = dataframes_dict['cerebrospinal_fluid']*-1
     else:
+        print("MULTIPLYING GM AND WM BY -1. POSITIVE VALUES IN ALL OUTPUTS REPRESENT MORE ATROPHY")
         for key in dataframes_dict.keys():
-            if key != 'cerebrospinal_fluid': dataframes_dict[k] = dataframes_dict[k]*-1
+            if key != 'cerebrospinal_fluid': dataframes_dict[key] = dataframes_dict[key]*-1
         
     if csfgm_only:
         dataframes_dict['csf-plus-gm'] = dataframes_dict['cerebrospinal_fluid'] + dataframes_dict['grey_matter']
@@ -61,5 +63,5 @@ def generate_composite_maps(dataframes_dict: dict, csfgm_only=True) -> dict:
     - dict: The original dictionary updated with additional keys for each combination of DataFrames. 
             Each new key contains the sum of absolute values of the combined DataFrames.
     """
-    dataframes_dict = generate_composite(dataframes_dict, csfgm_only=csfgm_only)
+    dataframes_dict = generate_composite(dataframes_dict, csfgm_only=csfgm_only, sign_flip_csf=False)
     return dataframes_dict

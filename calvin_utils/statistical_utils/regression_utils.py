@@ -52,3 +52,31 @@ class RegressOutCovariates():
         formula_dict = RegressOutCovariates.generate_formula(dependent_variable_list, covariates_list, intercept)
         df, adjusted_indep_vars_list = RegressOutCovariates.regress_out_covariates(df, formula_dict)
         return df, adjusted_indep_vars_list
+    
+def convert_to_ordinal(data_df, columns):
+    """
+    Convert unique values in specified columns of a DataFrame to ordinal values and print the mapping.
+
+    Parameters:
+    - data_df (pd.DataFrame): DataFrame containing the data to be converted.
+    - columns (list): List of column names to be converted to ordinal values.
+
+    Returns:
+    - ordinal_df (pd.DataFrame): DataFrame with specified columns converted to ordinal values.
+    - mapping_dict (dict): Dictionary showing the mapping of original values to ordinal values for each column.
+    """
+    ordinal_df = data_df.copy()
+    mapping_dict = {}
+
+    for column in columns:
+        if column in ordinal_df.columns:
+            unique_values = ordinal_df[column].unique()
+            unique_values.sort()  # Ensure the values are sorted before assigning ordinals
+            mapping_dict[column] = {value: idx for idx, value in enumerate(unique_values)}
+            ordinal_df[column] = ordinal_df[column].map(mapping_dict[column])
+
+    print("Mapping of unique values to ordinal values:")
+    for column, mapping in mapping_dict.items():
+        print(f"{column}: {mapping}")
+
+    return ordinal_df

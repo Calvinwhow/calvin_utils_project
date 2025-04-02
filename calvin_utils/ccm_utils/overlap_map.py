@@ -35,7 +35,7 @@ class OverlapMap:
     def __init__(
         self,
         data_loader: DataLoader,
-        mask_path: str = None,
+        mask_path: str,
         out_dir: str = None,
         map_type: str = 'r',      # 'ROI', 't', 'r', 'rfz' or 'custom'
         manual_threshold: float = None,
@@ -47,7 +47,7 @@ class OverlapMap:
         ----------
         data_loader : DataLoader
             The same data loader used in the correlation classes, providing access to 'niftis'.
-        mask_path : str, optional
+        mask_path : str
             Path to a mask for unmasking/masking arrays. If None, a default MNI mask is used.
         out_dir : str, optional
             Directory to save overlap maps.
@@ -71,7 +71,7 @@ class OverlapMap:
         if out_dir is not None:
             self.out_dir = os.path.join(self.out_dir, f'{self.map_type}_overlap_maps')
             os.makedirs(out_dir, exist_ok=True)
-
+    
     def _get_threshold(self):
         if self.manual_threshold is None:
             if self.map_type == 'ROI':
@@ -142,44 +142,15 @@ class OverlapMap:
             stepwise_dict[dataset_name] = stepwise
         return stepwise_dict
 
-    def save_maps(self, overlap_map_dict, suffix='_overlap'):
-        """
-        Save each overlap map in `overlap_map_dict` as a NIfTI file, unmasking as needed.
-        
-        Parameters
-        ----------
-        overlap_map_dict : dict
-            Dictionary of {dataset_name: overlap_1d_array}.
-        suffix : str, optional
-            Filename suffix, e.g. '_overlap' or '_stepwise'.
-        """
-        for dataset_name, overlap_map in overlap_map_dict.items():
-            img = self._save_map(overlap_map, dataset_name + suffix + '.nii.gz')
-            if self.verbose:
-                try:
-                    self._visualize_map(img, f"{dataset_name}{suffix}")
-                except:
-                    pass
-
-    def _binarize(self, flatten_niftis, threshold):
-        """
-        Binarize the flattened NIfTI data according to absolute thresholding.
-        
-        Values with abs(value) >= threshold => 1, else => 0.
-        
-        Parameters
-        ----------
-        flatten_niftis : np.ndarray
-            Shape (n_subj, n_voxels).
-        threshold : float
-            The absolute threshold for binarization.
-        
-        Returns
-        -------
-        np.ndarray
-            Binarized array (same shape).
-        """
-        return (np.abs(flatten_niftis) >= threshold).astype(int)
+    def _binarize(self, flatten_niftis, threshold, signed=True):
+        """Binarize the flattened NIfTI data according to absolute thresholding. """
+        if signed:
+            binary_map = np.zeros_like(flatten_niftis, dtype=int)
+            binary_map[flatten_niftis >= threshold] = 1
+            binary_map[flatten_niftis <= -threshold] = -1
+        else:
+            binary_map = (np.abs(flatten_niftis) >= threshold).astype(int)
+        return binary_map
     
     def _load_nifti(self, path):
         img = nib.load(path)
@@ -208,17 +179,10 @@ class OverlapMap:
         """
         Load mask data. If none specified, load MNI default.
         """
-        if self.mask_path is not None:
-            mdata = nib.load(self.mask_path)
-            mask_data = mdata.get_fdata()
-            mask_affine = mdata.affine
-        else:
-            # Example of a default MNI152 mask from nimlab or other local resource
-            from nimlab import datasets as nimds
-            mdata = nimds.get_img("mni_icbm152")
-            mask_data = mdata.get_fdata()
-            mask_affine = mdata.affine
-            mask_header = mdata.header
+        mdata = nib.load(self.mask_path)
+        mask_data = mdata.get_fdata()
+        mask_affine = mdata.affine
+            
         return mask_data, mask_affine
 
     def _save_map(self, map_data, file_name):
@@ -239,6 +203,25 @@ class OverlapMap:
         """
         plotting.view_img(img, title=title).open_in_browser()
     
+    def save_maps(self, overlap_map_dict, suffix='_overlap'):
+        """
+        Save each overlap map in `overlap_map_dict` as a NIfTI file, unmasking as needed.
+        
+        Parameters
+        ----------
+        overlap_map_dict : dict
+            Dictionary of {dataset_name: overlap_1d_array}.
+        suffix : str, optional
+            Filename suffix, e.g. '_overlap' or '_stepwise'.
+        """
+        for dataset_name, overlap_map in overlap_map_dict.items():
+            img = self._save_map(overlap_map, dataset_name + suffix + '.nii.gz')
+            if self.verbose:
+                try:
+                    self._visualize_map(img, f"{dataset_name}{suffix}")
+                except:
+                    pass
+
     def run(self):
         """
         Orchestrate the overlap computation pipeline for all datasets in the DataLoader.

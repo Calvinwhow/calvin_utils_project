@@ -72,39 +72,67 @@ def process_atrophy_dataframes(dataframes_dict, control_dataframes_dict):
 
     return atrophy_dataframes_dict, significant_atrophy_dataframes_dict
 
-def save_nifti_to_bids(dataframes_dict, bids_base_dir, analysis='tissue_segment_z_scores', ses=None, dry_run=True):
+def save_nifti_to_bids(dataframes_dict, bids_base_dir, mask_path, analysis='tissue_segment_z_scores', ses=None, dry_run=True):
     """
-    Saves NIFTI images to a BIDS directory structure.
-    
+    Saves NIFTI images to a BIDS-compliant directory structure.
+
     Parameters:
-    - dataframes_dict (dict): Dictionary containing dataframes with NIFTI data.
+    - dataframes_dict (dict): A dictionary where keys are tissue types or categories, 
+                                and values are DataFrames containing NIFTI data for each subject.
     - bids_base_dir (str): The base directory where the BIDS structure starts.
+    - mask_path (str): Path to the mask file used for reference when saving NIFTI images.
+    - analysis (str, optional): The name of the analysis folder to save the NIFTI images under. 
+                                    Defaults to 'tissue_segment_z_scores'.
     - ses (str, optional): Session identifier. If None, defaults to '01'.
-    
+    - dry_run (bool, optional): If True, prints the output directory paths without saving files. 
+                                    Defaults to True.
+
     Note:
-    This function assumes a predefined BIDS directory structure and saves the NIFTI 
-    images accordingly. The function currently has the view_and_save_nifti call commented out 
-    for safety. Uncomment this call if you wish to actually save the NIFTI images.
+    This function assumes a predefined BIDS directory structure and saves the NIFTI images 
+    accordingly. If `dry_run` is set to True, the function will only print the intended save 
+    paths without creating any files. To actually save the NIFTI images, set `dry_run` to False.
     """
-    
-    for k in tqdm(dataframes_dict.keys()):
-        for col in dataframes_dict[k].columns:
-            
-            # Define BIDS Directory Architecture
+    def construct_bids_path(bids_base_dir, sub_no, ses_no, analysis):
+        """
+        Constructs the BIDS-compliant output directory path.
+
+        Parameters:
+        - bids_base_dir (str): Base directory for BIDS structure.
+        - sub_no (str): Subject identifier.
+        - ses_no (str): Session identifier.
+        - analysis (str): Folder name.
+
+        Returns:
+        - str: Full path to the output directory.
+        """
+        return os.path.join(bids_base_dir, f'sub-{sub_no}', f'ses-{ses_no}', analysis)
+
+    def save_or_print_nifti(dataframe, col, out_dir, tissue_type, dry_run, mask_path):
+        """
+        Saves or prints the NIFTI file path for a given subject.
+
+        Parameters:
+        - dataframe (pd.DataFrame): DataFrame containing NIFTI data.
+        - col (str): Column name representing the subject.
+        - out_dir (str): Output directory path.
+        - tissue_type (str): Tissue type or category.
+        - dry_run (bool): If True, only prints the path; otherwise, saves the file.
+        - mask_path (str): File to use as mask
+        """
+        output_name = f'sub-{col}_{tissue_type}'
+        if dry_run:
+            print(os.path.join(out_dir, output_name))
+        else:
+            view_and_save_nifti(matrix=dataframe[col],
+                                out_dir=out_dir,
+                                output_name=output_name,
+                                ref_file=mask_path)
+
+    ses_no = ses if ses else '01'
+
+    for tissue_type, dataframe in tqdm(dataframes_dict.items()):
+        for col in dataframe.columns:
             sub_no = col
-            if ses is None:
-                ses_no = '01'
-            else:
-                ses_no = ses
-            
-            # Define and Initialize the Save Directory
-            out_dir = os.path.join(bids_base_dir, f'sub-{sub_no}', f'ses-{ses_no}', analysis)
+            out_dir = construct_bids_path(bids_base_dir, sub_no, ses_no, analysis)
             os.makedirs(out_dir, exist_ok=True)
-            
-            # Save Image to BIDS Directory
-            if dry_run:
-                print(out_dir+f'/sub-{sub_no}_{k}')
-            else:
-                view_and_save_nifti(matrix=dataframes_dict[k][col],
-                                    out_dir=out_dir,
-                                    output_name=(f'sub-{sub_no}_{k}'))
+            save_or_print_nifti(dataframe, col, out_dir, tissue_type, dry_run, mask_path)

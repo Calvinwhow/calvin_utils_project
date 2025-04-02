@@ -126,10 +126,13 @@ class NiftiOptimizer:
         if verbose: print(f"RHO_LIST): {RHO_LIST}")
         return np.array(RHO_LIST)
     
-    def _target_function(self, RHO_ARR):
+    def _target_function(self, RHO_ARR, mean_rho=True):
         """Measure the Root Mean Rho. Like RMAE"""
-        mean_abs_rho = np.mean(np.abs(RHO_ARR))
-        return np.sqrt(mean_abs_rho)
+        if mean_rho:     # mean rho
+            target = np.mean(RHO_ARR)
+        else:            # root mean absolute rho
+            target = np.sqrt(np.mean(np.abs(RHO_ARR)))
+        return target
 
     def _penalty_all_weights(self,threshold=0.33, downscale=1000):
         '''Block all weights from going over threshold'''
