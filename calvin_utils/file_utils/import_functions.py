@@ -9,6 +9,7 @@ import nibabel as nib
 from glob import glob
 from tqdm import tqdm
 from nilearn import image
+from calvin_utils.ccm_utils.bounding_box import NiftiBoundingBox
 from calvin_utils.nifti_utils.generate_nifti import view_and_save_nifti
 
 class GiiNiiFileImport:
@@ -137,6 +138,25 @@ class GiiNiiFileImport:
         data = np.nan_to_num(data, nan=0.0, posinf=max_val, neginf=min_val)
         return data
     
+    @property
+    def affines(self):
+        if not hasattr(self, '_affines'):
+            self._affines = set()
+        return self._affines
+
+    @affines.setter
+    def affines(self, value):
+        if not hasattr(self, '_affines'):
+            self._affines = set()
+        self._affines.add(value)
+
+    def import_npy_to_numpy_array(self, file_path):
+        '''Loads a numpy array from a .npy file. Calvin formats these as (subjects, voxels), which are the entire dataframe.'''
+        data = np.load(file_path)
+        data = data.T  # Transpose to (voxels, observations)
+        column_names = [f"sub_{i}" for i in range(data.shape[1])]  # Generate column names
+        return pd.DataFrame(data, columns=column_names)  # Assign to DataFrame with column names
+
     def import_nifti_to_numpy_array(self, file_path):
         '''
         Does what it says. Just provide the absolute filepath.
@@ -146,13 +166,10 @@ class GiiNiiFileImport:
             nifti_data: nifti_data as a numpy array
         '''
         try:
-            # Load the NIfTI image using nilearn
             nifti_img = image.load_img(file_path)
-
-            # Convert the NIfTI image to a NumPy array
+            # print(nifti_img.affine)
+            self.affines = tuple(nifti_img.affine.flatten())
             nifti_data = nifti_img.get_fdata().flatten()
-
-            # Return the NIfTI image
             return nifti_data
         except Exception as e:
             print("Error:", e)
@@ -199,31 +216,53 @@ class GiiNiiFileImport:
             return 'nii'
         elif file_path.lower().endswith('.gii') or file_path.lower().endswith('.gii.gz'):
             return 'gii'
+        elif file_path.lower().endswith('.npy'):
+            return 'npy'
         else:
             return ''
 
+    def align_imported_matrices(self, file_paths):
+        '''Using the affines of the imported matrices, we will create a bounding box that encompasses all the matrices and place them in it.'''
+        self.bbox = NiftiBoundingBox(file_paths)
+        self.bbox.generate_bounding_box()
+        self.bbox.add_niftis_to_bounding_box()
+        self.bbox.collapse_bbox_to_3d()
+        self.bbox_mask = self.bbox.collapsed_bbox_to_mask()
+        self.bbox_4d = self.bbox._stacked_data
+    
     def import_matrices(self, file_paths):
+        '''Given a list of file paths, import the data and return a dataframe with the imported files, flattened such that each column is a file.'''
         for file_path in file_paths:
             # Load and Check if File Path Exists
             path = self.identify_file_type(file_path)
             if path == 'nii':
                 data = self.import_nifti_to_numpy_array(file_path)
+                self.matrix_df[file_path] = data 
             elif path == 'gii':
                 data = self.import_gifti_to_numpy_array(file_path)
+                self.matrix_df[file_path] = data 
+            elif path == 'npy':
+                df = self.import_npy_to_numpy_array(file_path)
+                self.matrix_df = df #override the matrix_df with the new one
             else:
-                try:
-                    data = self.import_nifti_to_numpy_array(file_path)
-                except Exception as e:
-                    raise RuntimeError(e)
-            
-            # Convert NaNs and Infs if specified
+                raise RuntimeError(f"Failed to import file: {file_path}. Error: path type {path} is not yet implemented")
+
+        if len(self.affines) > 1:
+            print("Warning: Multiple affines detected. Aligning to common space. Mask is available as self.bbox_mask and 4d data as self.bbox_4d.")
+            self.matrix_df = pd.DataFrame({})               # Reset the matrix_df to empty
+            self.align_imported_matrices(file_paths)
+            for i, file_path in enumerate(file_paths):
+                data = self.bbox_4d[:, :, :, i]
+                self.matrix_df[file_path] = data.flatten()
+                
+        for file_path, data in self.matrix_df.items():
             if self.process_special_values:
                 data = self.handle_special_values(data)
-                
-            # Generate unique column name
-            name = self.generate_name(file_path)
-            # Add data to DataFrame
-            self.matrix_df[name] = data 
+            new_name = self.generate_name(file_path)
+            self.matrix_df[new_name] = data
+
+        # drop the original file paths so we only have the processed filenames
+        self.matrix_df = self.matrix_df.drop(columns=[file_path for file_path in self.matrix_df.keys() if file_path not in self.matrix_df.columns])
         return self.matrix_df
 
     def import_from_csv(self):
@@ -291,18 +330,14 @@ class GiiNiiFileImport:
         Simple masking function.
         """
         if mask_path is None:
-            try:
-                from nimlab import datasets as nimds
-            except Exception as e:
-                raise ValueError(f"Error: {e}. \n Resolve by specifying a mask or installing Nimlab at https://github.com/nimlab/documentation.git")
-            mask = nimds.get_img("mni_icbm152")
+            mask = np.ones(df.shape[0], dtype=bool)
+            mask_indices = np.arange(df.shape[0])
+            masked_df = df
         else:
             mask = nib.load(mask_path)
-            
-        mask = mask.get_fdata().flatten()
-        mask_indices = mask > threshold
-        masked_df = df.loc[mask_indices, :]
-
+            mask = mask.get_fdata().flatten()
+            mask_indices = mask > threshold
+            masked_df = df.loc[mask_indices, :]
         return mask, mask_indices, masked_df
     
     @staticmethod
@@ -311,18 +346,30 @@ class GiiNiiFileImport:
         Simple unmasking function.
         """
         if mask_path is None:
-            try:
-                from nimlab import datasets as nimds
-            except Exception as e:
-                raise ValueError(f"Error: {e}. \n Resolve by specifying a mask or installing Nimlab at https://github.com/nimlab/documentation.git")
+            unmasked_df = df
         else:
             mask = nib.load(mask_path)
-        mask = mask.get_fdata().flatten()
-        mask_indices = mask > threshold
-        
-        unmasked_df = pd.DataFrame(index=mask, columns=df.columns, data=0)
-        unmasked_df.iloc[mask_indices, :] = df
+            mask = mask.get_fdata().flatten()
+            mask_indices = mask > threshold
+            unmasked_df = pd.DataFrame(index=mask, columns=df.columns, data=0)
+            unmasked_df.iloc[mask_indices, :] = df
         return unmasked_df
+    
+    @staticmethod
+    def mask_array(arr: np.array, mask_path: str=None, threshold: float=0):
+        """
+        Simple masking function.
+        """
+        if mask_path is None:
+            mask = np.ones(df.shape[0], dtype=bool)
+            mask_indices = np.arange(df.shape[0])
+            masked_arr = arr
+        else:
+            mask = nib.load(mask_path)
+            mask = mask.get_fdata().flatten()
+            mask_indices = mask > threshold
+            masked_arr = arr[mask_indices]
+        return mask, mask_indices, masked_arr
     
     @staticmethod
     def splice_colnames(df, pre, post):
@@ -339,7 +386,6 @@ class GiiNiiFileImport:
             # Add the original and new name to the mapping
             name_mapping[name] = new_name
         return df.rename(columns=name_mapping)
-    
     
     def run(self):
         self.import_data_based_on_type()

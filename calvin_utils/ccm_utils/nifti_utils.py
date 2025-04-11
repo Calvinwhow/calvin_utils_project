@@ -1,5 +1,6 @@
 import os
 import json
+import glob
 import shutil
 import numpy as np
 import pandas as pd
@@ -11,6 +12,39 @@ from calvin_utils.file_utils.import_functions import GiiNiiFileImport
 
 class DatasetNiftiImporter(GiiNiiFileImport):
     def __init__(self, df, dataset_col, nifti_col, indep_var_col, covariate_cols, out_dir, mask_path=None, regression_method='tensor', data_transform_method='standardize'):
+        """
+        Initializes the utility class for handling NIfTI data processing and regression analysis.
+        This class is designed to facilitate the processing of neuroimaging data stored in NIfTI format.
+        It prepares the data for regression analysis, applies transformations, and organizes the data
+        into a structured format for further processing. The class supports multiple regression methods
+        and data transformation techniques, making it flexible for various use cases in neuroimaging
+        research.
+        Args:
+            df (pd.DataFrame): A pandas DataFrame containing metadata and file paths for the NIfTI files.
+            dataset_col (str): The name of the column in `df` that specifies the dataset identifier.
+            nifti_col (str): The name of the column in `df` that contains the file paths to the NIfTI files.
+            indep_var_col (str): The name of the column in `df` that specifies the independent variable for regression.
+            covariate_cols (list of str): A list of column names in `df` that specify covariates to include in the regression.
+            out_dir (str): The output directory where processed data and results will be saved.
+            mask_path (str, optional): The file path to a NIfTI mask file. If provided, the mask will be applied to the data.
+                                       Defaults to None.
+            regression_method (str, optional): The regression method to use. Options include 'tensor' and others.
+                                               Defaults to 'tensor'.
+            data_transform_method (str, optional): The method for transforming the data. Options include 'standardize' and others.
+                                                   Defaults to 'standardize'.
+        Attributes:
+            data_dict (dict): A dictionary to store processed data for each dataset.
+            regression_method (str): The regression method specified during initialization.
+            data_transform_method (str): The data transformation method specified during initialization.
+        Methods:
+            _prepare_data_dict(): Prepares the internal data dictionary for storing processed data.
+            _create_dataset_dict(): Organizes the data into a structured format for each dataset.
+        Notes:
+            This class is part of a larger utility module designed for neuroimaging data analysis.
+            It assumes that the input DataFrame (`df`) is properly formatted and contains all necessary
+            columns specified in the arguments.
+        """
+        
         self.df = df
         self.dataset_col = dataset_col
         self.nifti_col = nifti_col
@@ -21,9 +55,11 @@ class DatasetNiftiImporter(GiiNiiFileImport):
         self.data_dict = {}
         self.regression_method = regression_method
         self.data_transform_method = data_transform_method
+       
+    def package_data(self):
         self._prepare_data_dict()
         self._create_dataset_dict()
-        
+    
     def _prep_dataset_dir(self, dataset):
         dataset_dir = os.path.join(self.out_dir, 'tmp', dataset)
         os.makedirs(dataset_dir, exist_ok=True)
@@ -47,7 +83,11 @@ class DatasetNiftiImporter(GiiNiiFileImport):
             self.data_dict[dataset]['niftis'] = nifti_importer.import_matrices(nifti_paths)
             self.data_dict[dataset]['indep_var'] = self.prep_dmatrix(dataset_df.loc[:, [self.indep_var_col]])
             self.data_dict[dataset]['covariates'] = self.prep_dmatrix(dataset_df.loc[:, self.covariate_cols])
-
+        
+            if (nifti_importer.bbox_mask is not None) and (self.mask_path is None):
+                print("----- \n MASK NOT FOUND NOR PROVIDED. GENERATING MASK AT BELOW PATH. RERUN THIS NOTEBOOK USING THE MASK BELOW: \m")
+                print("\t Use this mask for all subsequent analyses: ", os.path.join(self.out_dir, 'mask.nii.gz'))
+                nifti_importer.bbox.save_nifti(nifti_importer.bbox_mask, os.path.join(self.out_dir, 'mask.nii.gz'))
             self._process_dataset(dataset, dataset_dir)
             
     def prep_dmatrix(self, df):
@@ -201,3 +241,26 @@ class DatasetNiftiImporter(GiiNiiFileImport):
             json.dump(dataset_dict, f)
         print(f"Dataset dictionary saved to: {dict_path}")
         return dataset_dict
+    
+    @staticmethod
+    def import_niftis_to_dict(mask_path, nifti_glob):
+        """
+        Discover NIfTI files via a glob pattern, apply the current mask (self.mask_path),
+        and return a dictionary where:
+        - keys = basenames of each file
+        - values = masked data arrays, shape (1, number_of_voxels)
+        """
+        out_dict = {}
+        nifti_list = sorted(glob.glob(nifti_glob))
+        if not nifti_list:
+            raise ValueError(f"No files found for glob pattern: {nifti_glob}")
+        print(f"Found {len(nifti_list)} NIfTI files.")
+
+        for file_path in nifti_list:
+            importer = GiiNiiFileImport(file_path, subject_pattern='', process_special_values=True)
+            nifti_arr = importer.import_nifti_to_numpy_array(file_path)
+            _, _, masked_arr = GiiNiiFileImport.mask_array(nifti_arr, mask_path=mask_path)
+            if masked_arr.ndim != 2 and masked_arr.shape[0] != 1:
+                masked_arr = masked_arr.reshape(1, -1)
+            out_dict[os.path.basename(file_path)] = masked_arr
+        return out_dict

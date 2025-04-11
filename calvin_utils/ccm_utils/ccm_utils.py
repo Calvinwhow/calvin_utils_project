@@ -161,29 +161,26 @@ class ConvergentMapGenerator:
                 
     def _mask_array(self, data_array, threshold=0):
         if self.mask_path is None:
-            from nimlab import datasets as nimds
-            mask = nimds.get_img("mni_icbm152")
+            masked_array = data_array.flatten()
         else:
             mask = nib.load(self.mask_path)
-
-        mask_data = mask.get_fdata()
-        mask_indices = mask_data.flatten() > threshold
-        
-        masked_array = data_array.flatten()[mask_indices]
+            mask_data = mask.get_fdata()
+            mask_indices = mask_data.flatten() > threshold
+            masked_array = data_array.flatten()[mask_indices]
         return masked_array
     
     def _unmask_array(self, data_array, threshold=0):
         if self.mask_path is None:
-            from nimlab import datasets as nimds
-            mask = nimds.get_img("mni_icbm152")
+            unmasked_array = data_array.flatten()
         else:
             mask = nib.load(self.mask_path)
-
-        mask_data = mask.get_fdata()
-        mask_indices = mask_data.flatten() > threshold
-        
-        unmasked_array = np.zeros(mask_indices.shape)
-        unmasked_array[mask_indices] = data_array.flatten()
+            mask_data = mask.get_fdata()
+            mask_indices = mask_data.flatten() > threshold
+            unmasked_array = np.zeros(mask_indices.shape)
+            
+            print(data_array.shape, mask_indices.shape, unmasked_array.shape)
+            
+            unmasked_array[mask_indices] = data_array.flatten()
         return unmasked_array.reshape(mask_data.shape), mask.affine
 
     def _save_map(self, map_data, file_name):
@@ -799,7 +796,7 @@ class CorrelationAnalysis:
     datasets_to_flip: 
         list of dataset names. if detected, will flip multiply correlation map by -1. Use this to manually align maps to a similar topology. 
     topology_command:
-        string. set topology_command to one of: None | 'r2' | 'absval'. This method is applied to maps before measuring similarity.
+        string. set topology_command to one of: None | 'aligned' | 'r2' | 'absval'. This method is applied to maps before measuring similarity.
     run():
         Runs the entire correlation analysis process and returns the p-value and pairwise p-values.
     """
