@@ -22,82 +22,72 @@ class CalvinStatsmodelsPalm(CalvinPalm):
         data_df = super().read_data()
         return data_df
     
-    # def define_design_matrix(self, formula, data_df, voxelwise_dv=False, voxelwise_variable=None, coerce_str=False):
-    #     """
-    #     Defines the design matrix based on the patsy formula and returns it as a DataFrame.
-        
-    #     Parameters:
-    #     - formula: str, the patsy formula to construct the design matrix
-    #     - data_df: DataFrame, the data frame from which to construct the design matrix
-    #     - voxelwise_variablre: str, the column in data_df with paths to the voxelwise regressor files (niftis)
-        
-    #     Returns:
-    #     - Tuple containing the design matrix for the dependent variable and the design matrix for the independent variables.
-    #     """
-
-    #     if voxelwise_variable is not None:
-    #         vars = patsy.ModelDesc.from_formula(formula)
-    #         vars.rhs_termlist.remove(patsy.Term([patsy.EvalFactor(voxelwise_variable)]))
-    #         y, X = patsy.dmatrices(vars, data_df, return_type='dataframe')
-    #         X[voxelwise_variable] = data_df[voxelwise_variable]
-    #     else:
-    #         y, X = patsy.dmatrices(formula, data_df, return_type='dataframe')
-    #     if y.shape[1] == 2:         # remove second column in binomial case
-    #         y = y.iloc[:,[0]]
-    #     return y, X
-    def define_design_matrix(self, formula, data_df, voxelwise_variable_list=None, coerce_str=False, add_intercept=True):
+    def define_design_matrix(self, formula, data_df, voxelwise_variable_list=None, coerce_str=False, add_intercept=True, voxelwise_interaction_terms=None):
         """
-        Defines the design matrix while ensuring voxelwise variables are not expanded into dummies.
+        Defines the design matrix while handling voxelwise variables and optional preprocessing.
 
         Parameters:
-        - formula: str, the patsy formula to construct the design matrix
-        - data_df: DataFrame, the data frame containing all variables
-        - voxelwise_variable: str, variable that should not be expanded by patsy (voxelwise regressor)
-        - coerce_str: bool, whether to coerce categorical strings to integer values
+        - formula: str
+            The patsy formula to construct the design matrix.
+        - data_df: DataFrame
+            The data frame containing all variables.
+        - voxelwise_variable_list: list, optional
+            List of variables that should not be expanded into dummies by patsy.
+        - coerce_str: bool, default False
+            Whether to coerce categorical strings to integer values before processing.
+        - add_intercept: bool, default True
+            Whether to include an intercept in the design matrix.
+        - voxelwise_interaction_terms: list, optional
+            List of interaction terms involving voxelwise variables to reintroduce.
 
         Returns:
-        - y: DataFrame, dependent variable matrix
-        - X: DataFrame, independent variable matrix
+        - y: DataFrame
+            Dependent variable matrix.
+        - X: DataFrame
+            Independent variable matrix.
         """
-
-        # 1. Convert categorical strings to integer codes **before** patsy processes them
-        if coerce_str:
-            categorical_mappings = {}
-            for col in data_df.columns:
-                if col not in voxelwise_variable_list:
-                    data_df[col], unique = pd.factorize(data_df[col])
-
-        # 2. Remove voxelwise variable from the formula before patsy processes it
+        vars = patsy.ModelDesc.from_formula(formula)
         if voxelwise_variable_list is not None:
-            vars_desc = patsy.ModelDesc.from_formula(formula)
-            
-            # Handle covariates
-            for var in voxelwise_variable_list:
-                vars_desc.rhs_termlist = [
-                    term for term in vars_desc.rhs_termlist
-                    if var not in [str(factor) for factor in term.factors]
-                ]
-                
-            y, X = patsy.dmatrices(vars_desc, data_df, return_type='dataframe')
+            for term in voxelwise_variable_list:                                    # remove each voxelwise variable from the formula
+                vars.rhs_termlist.remove(patsy.Term([patsy.EvalFactor(term)]))
 
-            for var in voxelwise_variable_list:
-                if var in formula.split('~')[1]:
-                    X[var] = data_df[var]
-                if var in formula.split('~')[0]:
-                    y = data_df.loc[:, [var]]
-        else:
-            y, X = patsy.dmatrices(formula, data_df, return_type='dataframe')
+        if coerce_str:                                                              #Convert categorical strings to integer codes **before** patsy processes them
+            for col in data_df.columns:                     
+                if col not in voxelwise_variable_list:
+                    data_df[col], _ = pd.factorize(data_df[col])               # factorize categorical variables, but not the voxelwise ones
+                
+        y, X = patsy.dmatrices(vars, data_df, return_type='dataframe')
         
         if y.shape[1] == 2:  # Remove second column in binomial case
             y = y.iloc[:, [0]]
             
-        if add_intercept==False:
+        if add_intercept==False:                                                    # check the intercept
             X.pop('Intercept')
-
+        if voxelwise_variable_list is not None:                                     
+            for term in voxelwise_variable_list:                                    
+                X[term] = data_df[term]                                             # reinsert the voxelwise variables, uninteracted
+                X = self._remove_voxelwise_interaction_terms(data_df, X, voxelwise_variable_list)  # check for interactions with the voxelwise variables
+                X = self._reintroduce_voxelwise_interaction_terms(X, voxelwise_interaction_terms)      
         return y, X
-
-
-
+    
+    def _reintroduce_voxelwise_interaction_terms(self, dmatrix, voxelwise_interaction_terms):
+        """Reintroduces the voxelwise interaction terms"""
+        if voxelwise_interaction_terms is None:
+            return dmatrix
+        for term in voxelwise_interaction_terms:
+            dmatrix[term.replace(' ', '')] = 'voxelwise_interaction'
+        return dmatrix
+    
+    def _remove_voxelwise_interaction_terms(self, df, dmatrix, voxelwise_vars):
+        '''Removes patsy terms'''
+        for voxelwise_column in voxelwise_vars:
+            for dmatrix_col in dmatrix.columns: 
+                pathlist = df[voxelwise_column]
+                for path in pathlist:
+                    if path in dmatrix_col:
+                        dmatrix.pop(dmatrix_col)
+        return dmatrix
+        
     def drop_nans_from_columns(self, columns_to_drop_from=None):
         """
         Drops rows with NaNs from specified columns in the DataFrame.

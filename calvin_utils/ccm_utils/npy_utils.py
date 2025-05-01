@@ -91,7 +91,6 @@ class DataLoader:
 
                 
 ###for regression analysis###
-
 class RegressionNPYPreparer:
     """
     Given:

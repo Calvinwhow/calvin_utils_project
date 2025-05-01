@@ -6,7 +6,7 @@ import seaborn as sns
 
 
 class ResampleVisualizer:
-    def __init__(self, stat_array_1, stat_array_2, model1_name="X", model2_name="Y", out_dir=None):
+    def __init__(self, stat_array_1, stat_array_2, model1_name="X", model2_name="Y", stat="R²", out_dir=None):
         """
         Initializes the resampling plot object for visualizing paired delta statistics.
         This class is used to plot the paired delta between a statistic observed for 
@@ -16,6 +16,7 @@ class ResampleVisualizer:
             stat_array_2 (float): The R-squared value for the second region of interest (ROI).
             model1_name (str, optional): Name of the first model. Defaults to "X".
             model2_name (str, optional): Name of the second model. Defaults to "Y".
+            stat (str, optional): The statistic name to be plotted. Defaults to "R²".
             out_dir (str, optional): Where to save. 
         """
         self.stat_array_1 = stat_array_1
@@ -24,6 +25,7 @@ class ResampleVisualizer:
         self.model1_name = model1_name
         self.model2_name = model2_name
         self.out_dir = out_dir
+        self.stat = stat
         self.BLACK = '#211D1E'
         self.GREY = '#8E8E8E'
         self.colors = self.compute_line_colors_abrupt()
@@ -101,8 +103,8 @@ class ResampleVisualizer:
     def setup_slope_subplot(self, ax):
         ax.set_xticks([0, 1])
         ax.set_xticklabels([self.model1_name, self.model2_name])
-        ax.set_title("Paired R²", fontsize=20)
-        ax.set_ylabel("Explained Variance (R²)", fontsize=20)
+        ax.set_title(f"Paired {self.stat}", fontsize=20)
+        ax.set_ylabel(f"{self.stat}", fontsize=20)
         ax.set_xlim(-0.5, 1.5)
         ax.tick_params(labelsize=16)
         sns.despine(ax=ax)
@@ -112,8 +114,8 @@ class ResampleVisualizer:
         ax.axvline(0, color=self.GREY, linestyle='--')
         ax.set_xlim([-abs_limit, abs_limit])
         ax.set_ylim([0, ymax_padded])
-        ax.set_title(f"ΔR² Distribution", fontsize=20)
-        ax.set_xlabel("Additional Explained Variance (ΔR²)", fontsize=20)
+        ax.set_title(f"Δ{self.stat} Distribution", fontsize=20)
+        ax.set_xlabel(f"Additional Explained Variance (Δ{self.stat})", fontsize=20)
         ax.set_ylabel("Number of Resamples", fontsize=20)
         ax.tick_params(labelsize=16)
         ax.text(abs_limit * -0.95, ymax_padded * 0.95, f"Favours {self.model2_name}", ha='left', va='top', fontsize=16, color=self.BLACK)
@@ -125,7 +127,7 @@ class ResampleVisualizer:
         right_density = np.sum(self.delta_r2 >= 0)
         x_text = -0.9 * abs_limit if left_density < right_density else 0.9 * abs_limit
         ha_text = 'left' if left_density < right_density else 'right'
-        ci_text = f"ΔR² = {mean_delta:.4f}\nCI: [{ci_lower:.4f}, {ci_upper:.4f}]\np = {1-p:.4f}"
+        ci_text = f"Δ{self.stat} = {mean_delta:.4f}\nCI: [{ci_lower:.4f}, {ci_upper:.4f}]\np = {1-p:.4f}"
         ax.text(x_text, ymax_padded * 0.9, ci_text, ha=ha_text, va='top', fontsize=14, color=self.BLACK)
 
     def draw(self):

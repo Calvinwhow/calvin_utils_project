@@ -84,7 +84,7 @@ class DatasetNiftiImporter(GiiNiiFileImport):
             self.data_dict[dataset]['indep_var'] = self.prep_dmatrix(dataset_df.loc[:, [self.indep_var_col]])
             self.data_dict[dataset]['covariates'] = self.prep_dmatrix(dataset_df.loc[:, self.covariate_cols])
         
-            if (nifti_importer.bbox_mask is not None) and (self.mask_path is None):
+            if hasattr(nifti_importer, 'bbox_mask') and (nifti_importer.bbox_mask is not None) and (self.mask_path is None):
                 print("----- \n MASK NOT FOUND NOR PROVIDED. GENERATING MASK AT BELOW PATH. RERUN THIS NOTEBOOK USING THE MASK BELOW: \m")
                 print("\t Use this mask for all subsequent analyses: ", os.path.join(self.out_dir, 'mask.nii.gz'))
                 nifti_importer.bbox.save_nifti(nifti_importer.bbox_mask, os.path.join(self.out_dir, 'mask.nii.gz'))

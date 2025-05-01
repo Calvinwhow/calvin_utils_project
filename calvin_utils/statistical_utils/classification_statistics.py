@@ -1012,6 +1012,13 @@ class ComprehensiveMulticlassROC(MulticlassAUPRC):
       performance across all instances, but biases towards more highly represented classes.
       
     """
+    def save_dataframes(self):
+        self.predictions_df.to_csv(self.out_dir+'/predicted_probabilities.csv', index=False)
+        self.observations_df.to_csv(self.out_dir+'/observed_labels.csv', index=False)
+        print("Saved predicted probabilities to CSV files at: ", self.out_dir, 'as predicted_probabilities.csv')
+        print("and")
+        print("Saved observed labels to CSV files at: ", self.out_dir, 'as observed_labels.csv')
+        
     def run(self):
         """
         Orchestrates the evaluation including both the macro-average and micro-average ROC curves.

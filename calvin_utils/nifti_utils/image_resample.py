@@ -82,6 +82,7 @@ class ImageDownSampler:
             base, ext2 = os.path.splitext(base)
             ext = ext2 + ext
         output_path = base + '_resampled' + ext
+        print("Output path set to: ", output_path)
         self._output_path = output_path
         
     ###BUSINESS LOGIC###

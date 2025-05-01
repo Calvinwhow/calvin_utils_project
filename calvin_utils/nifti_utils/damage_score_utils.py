@@ -5,7 +5,6 @@ from tqdm import tqdm
 import os
 
 class DamageScorer:
-    
     def __init__(self, mask_path=None, dv_df=None, roi_df=None):
         """
         Initializes the class with the given mask path, dv_df, and roi_df, and loads brain indices.
@@ -69,7 +68,6 @@ class DamageScorer:
         '''Gets metric of damage between each independent variable nifti and dependent variable nifti'''
         subject_array = thresholded_df[subject].values
         roi_array = region_of_interest_df[roi].values
-
         if 'spatial_correlation' in metrics:
             damage_df.loc[subject, f'{roi}_spatial_corr'] = self._calculate_spatial_correlation(subject_array, roi_array)
         if 'cosine' in metrics:
@@ -78,8 +76,8 @@ class DamageScorer:
             damage_df.loc[subject, f'{roi}_sum'] = self._calculate_dot_product(subject_array, roi_array)
         if 'average' in metrics:
             damage_df.loc[subject, f'{roi}_average'] = self._calculate_normalized_dot_product(subject_array, roi_array)
-        if 'num_atrophic' in metrics:
-            damage_df.loc[subject, f'{roi}_num_atrophic'] = self._count_voxels_greater_than_threshold(subject_array, mask=roi_array, threshold=2)
+        if 'num_in_roi' in metrics:
+            damage_df.loc[subject, f'{roi}_num_in_roi'] = self._count_voxels_greater_than_threshold(subject_array, mask=roi_array, threshold=2)
 
     def _calculate_spatial_correlation(self, array1, array2):
         '''Calculates pearson correlation of 2 arrays'''
@@ -128,20 +126,20 @@ class DamageScorer:
         except:
             return df
     
-    def calculate_damage_scores(self, metrics=['spatial_correlation', 'cosine', 'sum', 'average', 'num_atrophic']):
+    def calculate_damage_scores(self, metrics=['spatial_correlation', 'cosine', 'sum', 'average', 'num_in_roi']):
         """
         Calculate damage scores for dv_df and roi_df based on specified metrics.
         This function computes damage scores by iterating through regions of interest and subjects,
         applying the specified metrics to evaluate the atrophy data.
         Args:
             metrics (list of str, optional): A list of metrics to calculate damage scores. 
-                Default is ['spatial_correlation', 'cosine', 'sum', 'average', 'num_atrophic'].
+                Default is ['spatial_correlation', 'cosine', 'sum', 'average', 'num_in_roi'].
                 Supported metrics include:
-                    - 'spatial_correlation': Measures spatial correlation between regions.
+                    - 'spatial_correlation': Measures spatial correlation between niftis.
                     - 'cosine': Computes cosine similarity.
                     - 'sum': Calculates the sum of values.
                     - 'average': Computes the average of values.
-                    - 'num_atrophic': Counts the number of atrophic regions.
+                    - 'num_in_roi': Counts the number of suprathreshold voxels inside the mmask.
         Returns:
             pd.DataFrame: A DataFrame containing the calculated damage scores for each subject
             and region of interest. Columns represent subjects, and rows represent regions.

@@ -513,7 +513,7 @@ class GLMPlot:
 
     def create_surface_plot(self, x1_vals: np.ndarray, x2_vals: np.ndarray, y_pred_initial: np.ndarray) -> go.Figure:
         """
-        Create the initial surface plot.
+        Create the initial surface plot with a cubic aspect ratio.
 
         Parameters
         ----------
@@ -538,6 +538,11 @@ class GLMPlot:
             opacity=0.7,
             name='Prediction Surface'
         ))
+        fig.update_layout(
+            scene=dict(
+                aspectmode='cube'  # Set the aspect ratio to cubic
+            )
+        )
         return fig
 
     def _decode_variable(self, var: str) -> List[Optional[str]]:

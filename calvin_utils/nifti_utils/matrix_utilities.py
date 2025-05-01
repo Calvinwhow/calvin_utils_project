@@ -118,9 +118,7 @@ def threshold_matrix(matrix, threshold=95, method='percentile', direction='keep_
     
     Returns:
         - np.array: Thresholded matrix.
-    """
-    print('--------------------------------Performing threshold--------------------------------')
-    
+    """    
     # Based on method, set the threshold value
     if isinstance(threshold, tuple):
         if method == 'probability':

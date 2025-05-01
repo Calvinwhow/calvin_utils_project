@@ -16,7 +16,8 @@ class ConjunctionMap:
         threshold1, threshold2 : float
             Threshold values for the data frames.
         direction1, direction2 : str
-            Directions for thresholding ('keep_above', 'keep_below', etc.).
+            Directions for thresholding ('keep_above', 'keep_below', 'keep_between', or 'exclude_between').
+            If you want to apply a keep_between or exclude_between threshold, you must provide a tuple of two values for the corresponding threshold
         mask_path : str, optional
             Shared path to the NIFTI mask file.
         output_dir : str
@@ -35,7 +36,7 @@ class ConjunctionMap:
         self.output_name = output_name
         
         if mask_path:
-            self.mask = import_nifti_to_numpy_array(mask_path)  # Replace with your import function
+            self.mask = import_nifti_to_numpy_array(mask_path)
         else:
             mask_img = nimds.get_img("mni_icbm152")
             self.mask = mask_img.get_fdata()

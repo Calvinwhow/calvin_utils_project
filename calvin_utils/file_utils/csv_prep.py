@@ -4,6 +4,7 @@ import pandas as pd
 from glob import glob
 from tqdm import tqdm
 from numpy import isnan
+from natsort import natsorted
 
 class CSVComposer:
     """
@@ -19,7 +20,7 @@ class CSVComposer:
         - 'covariate_col': dict, mapping of desired covariate name -> actual column name in CSV.
     """
 
-    def __init__(self, data_dict, allow_loose_match=False):
+    def __init__(self, data_dict, allow_loose_match=True):
         self.data_dict = data_dict
         self.composed_df = pd.DataFrame()  # Initialize an empty dataframe
         self.allow_loose_match=allow_loose_match
@@ -31,11 +32,10 @@ class CSVComposer:
             nifti_paths = glob(params['nifti_path'])
             csv_data = pd.read_csv(params['csv_path'])
             unique_subjects = csv_data[params['subj_col']].unique()
-
+            unique_subjects = natsorted(unique_subjects, reverse=True)
             for subject_id in tqdm(unique_subjects, desc=f"Processing {dataset}"):
                 subject_id_str = self._format_subject_id(subject_id)
                 matched_path = self._find_nifti_path_for_subject(nifti_paths, subject_id_str)
-
                 # Filter rows for this subject
                 sub_idx = csv_data[params['subj_col']] == subject_id
                 row_data = {
@@ -70,7 +70,7 @@ class CSVComposer:
                 return f"Missing value for '{col_name}'"
 
     def _format_subject_id(self, subject_id):
-        """Ensure subject ID is a string and handle NaNs."""
+        """Ensure subject ID is a string and handle NaNs"""
         if isinstance(subject_id, float):
             if isnan(subject_id):
                 return 'nan'
