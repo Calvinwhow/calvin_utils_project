@@ -1,6 +1,5 @@
 import numpy as np
 import pandas as pd
-from nimlab import datasets as nimds
 from calvin_utils.nifti_utils.generate_nifti import view_and_save_nifti
 from calvin_utils.nifti_utils.matrix_utilities import threshold_matrix, import_nifti_to_numpy_array, unmask_matrix, apply_mask_to_dataframe
 
@@ -38,8 +37,7 @@ class ConjunctionMap:
         if mask_path:
             self.mask = import_nifti_to_numpy_array(mask_path)
         else:
-            mask_img = nimds.get_img("mni_icbm152")
-            self.mask = mask_img.get_fdata()
+            raise ValueError("Mask path is required. Please provide a valid mask path.")
             
     def threshold_matrices(self):
         """
@@ -58,19 +56,11 @@ class ConjunctionMap:
         self.conjunction_df = self.df1_thresholded & self.df2_thresholded
         print(self.conjunction_df.shape)
 
-    def unmask_matrix(self):
-        """
-        Unmask the DataFrame to insert values back into their original locations in a full brain mask.
-        """
-        if not isinstance(self.conjunction_df, pd.DataFrame):
-            self.conjunction_df = pd.DataFrame(self.conjunction_df)
-        self.unmasked_df = unmask_matrix(apply_mask_to_dataframe(self.conjunction_df, mask_path=self.mask_path), self.mask_path)
-    
     def generate_save_and_view_nifti(self, output_dir=None, output_name=None):
         """
         Generate, save, and view the NIFTI file.
         """
-        self.img = view_and_save_nifti(self.unmasked_df, out_dir=output_dir, output_name=output_name)
+        self.img = view_and_save_nifti(self.conjunction_df, out_dir=output_dir, output_name=output_name, ref_file=self.mask_path)
         
     def run(self):
         """
@@ -78,7 +68,6 @@ class ConjunctionMap:
         """
         self.threshold_matrices()
         self.perform_conjunction()
-        self.unmask_matrix()
         self.generate_save_and_view_nifti(output_dir=self.output_dir, output_name=self.output_name)
         
         return self.img
