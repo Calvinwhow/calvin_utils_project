@@ -54,7 +54,6 @@ class ConjunctionMap:
         self.df2_thresholded = self.df2_thresholded.astype(bool)
         
         self.conjunction_df = self.df1_thresholded & self.df2_thresholded
-        print(self.conjunction_df.shape)
 
     def generate_save_and_view_nifti(self, output_dir=None, output_name=None):
         """
