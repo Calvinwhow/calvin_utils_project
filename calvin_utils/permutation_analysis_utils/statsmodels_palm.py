@@ -48,8 +48,12 @@ class CalvinStatsmodelsPalm(CalvinPalm):
         """
         vars = patsy.ModelDesc.from_formula(formula)
         if voxelwise_variable_list is not None:
-            for term in voxelwise_variable_list:                                    # remove each voxelwise variable from the formula
-                vars.rhs_termlist.remove(patsy.Term([patsy.EvalFactor(term)]))
+            new_rhs = []
+            for term in vars.rhs_termlist:
+                term_strs = [str(factor) for factor in term.factors]
+                if not any(vv in term_strs for vv in voxelwise_variable_list):
+                    new_rhs.append(term)
+            vars.rhs_termlist = new_rhs
 
         if coerce_str:                                                              #Convert categorical strings to integer codes **before** patsy processes them
             for col in data_df.columns:                     

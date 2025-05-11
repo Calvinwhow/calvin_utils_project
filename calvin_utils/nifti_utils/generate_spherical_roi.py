@@ -53,6 +53,39 @@ class SphereROIBuilder:
         return arr
     
     ### orchestration methods ###
+    def generate_from_single_coord(
+        self,
+        centre_xyz: Sequence[float] | str,
+        *,
+        subject: str,
+        session: str | None = None,
+        project_on_brain: bool = True,
+        suffix: str = ""
+    ) -> str:
+        """
+        Build **one** spherical ROI from a single MNI coordinate triplet
+        and write it to disk.
+
+        Parameters
+        ----------
+        centre_xyz : [x, y, z] list/tuple/ndarray **or** its string repr.
+        subject    : BIDS “sub-” label.
+        session    : BIDS “ses-” label (defaults to “ses-01”).
+        project_on_brain : Snap centre to nearest in-brain voxel.
+        suffix     : Extra text to append to the filename.
+
+        Returns
+        -------
+        str – absolute path to the saved NIfTI mask.
+        """
+        centre = self._normalize_coord_entry(centre_xyz)[0]  # (1,3) → (3,)
+        return self._build_and_save(
+            centre_xyz=centre,
+            subject=subject,
+            session=session,
+            project_on_brain=project_on_brain,
+            suffix=suffix,
+        )
 
     def generate_from_separate_coord_cols(self, df, x_col: str, y_col: str, z_col: str, sub_col: str, session_col: str | None = None, project_on_brain: bool = True) -> pd.DataFrame:
         """
