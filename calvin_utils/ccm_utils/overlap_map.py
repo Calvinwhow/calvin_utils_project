@@ -40,6 +40,7 @@ class OverlapMap:
         map_type: str = 'r',      # 'ROI', 't', 'r', 'rfz' or 'custom'
         manual_threshold: float = None,
         step_size: int = 5,
+        signed : bool = True,
         verbose: bool = True
     ):
         """
@@ -67,6 +68,7 @@ class OverlapMap:
         self.manual_threshold = manual_threshold
         self.step_size = step_size
         self.verbose = verbose
+        self.signed = signed
         self.threshold = self._get_threshold()
         if out_dir is not None:
             self.out_dir = os.path.join(self.out_dir, f'{self.map_type}_overlap_maps')
@@ -142,9 +144,9 @@ class OverlapMap:
             stepwise_dict[dataset_name] = stepwise
         return stepwise_dict
 
-    def _binarize(self, flatten_niftis, threshold, signed=True):
+    def _binarize(self, flatten_niftis, threshold):
         """Binarize the flattened NIfTI data according to absolute thresholding. """
-        if signed:
+        if self.signed:
             binary_map = np.zeros_like(flatten_niftis, dtype=int)
             binary_map[flatten_niftis >= threshold] = 1
             binary_map[flatten_niftis <= -threshold] = -1
