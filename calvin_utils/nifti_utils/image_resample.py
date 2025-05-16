@@ -1,7 +1,9 @@
 import os
 import numpy as np
 import nibabel as nib
+from tqdm import tqdm
 from scipy.spatial import KDTree
+import glob
 
 class ImageDownSampler:
     """

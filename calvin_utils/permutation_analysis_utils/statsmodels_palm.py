@@ -22,6 +22,25 @@ class CalvinStatsmodelsPalm(CalvinPalm):
         data_df = super().read_data()
         return data_df
     
+    # def simple_define_design_matrix(self, formula, data_df, voxelwise_variable_list=None, coerce_str=False, add_intercept=True):
+    #     vars = patsy.ModelDesc.from_formula(formula)
+    #     if voxelwise_variable_list is not None:
+    #         for term in voxelwise_variable_list:                                    # remove each voxelwise variable from the formula
+    #             vars.rhs_termlist.remove(patsy.Term([patsy.EvalFactor(term)]))
+    #     if coerce_str:                                                              #Convert categorical strings to integer codes **before** patsy processes them
+    #         for col in data_df.columns:                     
+    #             if col not in voxelwise_variable_list:
+    #                 data_df[col], _ = pd.factorize(data_df[col])               # factorize categorical variables, but not the voxelwise ones
+    #     y, X = patsy.dmatrices(vars, data_df, return_type='dataframe')
+    #     if y.shape[1] == 2:  # Remove second column in binomial case
+    #         y = y.iloc[:, [0]]
+    #     if add_intercept==False:                                                    # reinsert the voxelwise variable
+    #         X.pop('Intercept')
+    #     if voxelwise_variable_list is not None:                                     # reinsert the voxelwise variable
+    #         for term in voxelwise_variable_list:
+    #             X[term] = data_df[term]
+    #     return y, X
+    
     def define_design_matrix(self, formula, data_df, voxelwise_variable_list=None, coerce_str=False, add_intercept=True, voxelwise_interaction_terms=None):
         """
         Defines the design matrix while handling voxelwise variables and optional preprocessing.
@@ -46,6 +65,8 @@ class CalvinStatsmodelsPalm(CalvinPalm):
         - X: DataFrame
             Independent variable matrix.
         """
+        left = formula.split('~')[0].strip()
+        right = formula.split('~')[1].strip()
         vars = patsy.ModelDesc.from_formula(formula)
         if voxelwise_variable_list is not None:
             new_rhs = []
@@ -68,7 +89,10 @@ class CalvinStatsmodelsPalm(CalvinPalm):
         if add_intercept==False:                                                    # check the intercept
             X.pop('Intercept')
         if voxelwise_variable_list is not None:                                     
-            for term in voxelwise_variable_list:                                    
+            for term in voxelwise_variable_list:
+                if term in left:
+                    y = pd.DataFrame(data_df[term])  # reinsert the voxelwise variables, uninteracted, as a DataFrame
+                    continue
                 X[term] = data_df[term]                                             # reinsert the voxelwise variables, uninteracted
                 X = self._remove_voxelwise_interaction_terms(data_df, X, voxelwise_variable_list)  # check for interactions with the voxelwise variables
                 X = self._reintroduce_voxelwise_interaction_terms(X, voxelwise_interaction_terms)      
