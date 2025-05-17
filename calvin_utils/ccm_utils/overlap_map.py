@@ -7,27 +7,29 @@ from calvin_utils.ccm_utils.npy_utils import DataLoader
 class OverlapMap:
     """
     Class to compute a voxelwise percent-overlap map across each dataset loaded by DataLoader.
+
     The user can define how to binarize each dataset's NIfTI volumes via thresholding rules
-    (e.g. 't' => 7, 'r' => 0.1, 'rfz' => 5, 'ROI' => 0, or a user-defined float).
-    
+    (e.g. 't' => 7, 'r' => 0.1, 'rfz' => 5, 'ROI' => 1.0, or a user-defined float).
+
     Steps:
-    ------
+    -------
     1) For each dataset in DataLoader, load its 4D NIfTI stack (shape: [n_subjects, ...]).
-    2) Binarize each subject's volume based on `abs(value) >= threshold` => 1, else => 0.
+    2) Binarize each subject's volume based on abs(value) >= threshold: 1, <= -threshold: -1, else: 0.
     3) Sum these binarized maps over subjects → overlap_count.
     4) Convert overlap_count to percentage by dividing by n_subjects and multiplying by 100.
-    5) Generate a stepwise map (floored at 5% increments).
+    5) Generate a stepwise map (floored at step_size% increments).
     6) Save results as new NIfTI files, if desired.
 
     Example:
     --------
     omap = OverlapMap(
         data_loader=my_loader,
+        mask_path='mask.nii.gz',
         map_type='t',         # 't', 'r', 'rfz', 'ROI' or custom
         manual_threshold=None # e.g. 2.5. If None, uses default per map_type
     )
     overlap_dict = omap.generate_overlap_maps()
-    stepwise_dict = omap.generate_stepwise_maps(overlap_dict)
+    stepwise_dict = omap.generate_stepwise_maps()
     omap.save_maps(overlap_dict, suffix='_overlap')
     omap.save_maps(stepwise_dict, suffix='_stepwise')
     """
@@ -40,26 +42,28 @@ class OverlapMap:
         map_type: str = 'r',      # 'ROI', 't', 'r', 'rfz' or 'custom'
         manual_threshold: float = None,
         step_size: int = 5,
-        signed : bool = True,
+        save_absval : bool = True,
         verbose: bool = True
     ):
         """
         Parameters
         ----------
         data_loader : DataLoader
-            The same data loader used in the correlation classes, providing access to 'niftis'.
+            DataLoader instance providing access to datasets and their NIfTI arrays.
         mask_path : str
-            Path to a mask for unmasking/masking arrays. If None, a default MNI mask is used.
+            Path to a brain mask NIfTI file for masking/unmasking arrays.
         out_dir : str, optional
-            Directory to save overlap maps.
+            Directory to save output overlap maps. If None, maps are not saved.
         map_type : str, optional
-            One of {'ROI', 't', 'r', 'rfz'} or 'custom'. Determines the default threshold to use if manual_threshold is None.
+            One of {'ROI', 't', 'r', 'rfz'} or 'custom'. Determines the default threshold if manual_threshold is not set.
         manual_threshold : float, optional
-            Overrides the default threshold if provided.
+            If provided, overrides the default threshold for binarization.
         step_size : int, optional
-            For the stepwise map, floors values to increments of `step_size`%. Default=5.
-        verbose : bool
-            If true, will pop up the maps in a web browser viewer.
+            Step size (in percent) for binning overlap maps in stepwise output. Default is 5.
+        save_absval : bool, optional
+            If True, also saves the absolute value of overlap maps. Default is True.
+        verbose : bool, optional
+            If True, displays maps in a web browser using NiLearn. Default is True.
         """
         self.data_loader = data_loader
         self.mask_path = mask_path
@@ -68,7 +72,7 @@ class OverlapMap:
         self.manual_threshold = manual_threshold
         self.step_size = step_size
         self.verbose = verbose
-        self.signed = signed
+        self.save_absval = save_absval
         self.threshold = self._get_threshold()
         if out_dir is not None:
             self.out_dir = os.path.join(self.out_dir, f'{self.map_type}_overlap_maps')
@@ -146,12 +150,9 @@ class OverlapMap:
 
     def _binarize(self, flatten_niftis, threshold):
         """Binarize the flattened NIfTI data according to absolute thresholding. """
-        if self.signed:
-            binary_map = np.zeros_like(flatten_niftis, dtype=int)
-            binary_map[flatten_niftis >= threshold] = 1
-            binary_map[flatten_niftis <= -threshold] = -1
-        else:
-            binary_map = (np.abs(flatten_niftis) >= threshold).astype(int)
+        binary_map = np.zeros_like(flatten_niftis, dtype=int)
+        binary_map[flatten_niftis >= threshold] = 1
+        binary_map[flatten_niftis <= -threshold] = -1
         return binary_map
     
     def _load_nifti(self, path):
@@ -218,6 +219,7 @@ class OverlapMap:
         """
         for dataset_name, overlap_map in overlap_map_dict.items():
             img = self._save_map(overlap_map, dataset_name + suffix + '.nii.gz')
+            _ = self._save_map(np.abs(overlap_map), dataset_name + suffix + '_absval.nii.gz')
             if self.verbose:
                 try:
                     self._visualize_map(img, f"{dataset_name}{suffix}")
