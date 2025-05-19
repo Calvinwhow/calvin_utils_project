@@ -38,10 +38,7 @@ class CalvinPalm:
         - DataFrame: Preprocessed data read from the CSV file.
         """
         if self.sheet is not None:
-            try:
-                df = pd.read_excel(self.input_csv_path, sheet_name=self.sheet)
-            except Exception as e:
-                print(f'Error: {e}')
+            df = pd.read_excel(self.input_csv_path, sheet_name=self.sheet)
         else:
             df = pd.read_csv(self.input_csv_path)
         self.df = preprocess_colnames_for_regression(df)
