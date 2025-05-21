@@ -22,25 +22,6 @@ class CalvinStatsmodelsPalm(CalvinPalm):
         data_df = super().read_data()
         return data_df
     
-    # def simple_define_design_matrix(self, formula, data_df, voxelwise_variable_list=None, coerce_str=False, add_intercept=True):
-    #     vars = patsy.ModelDesc.from_formula(formula)
-    #     if voxelwise_variable_list is not None:
-    #         for term in voxelwise_variable_list:                                    # remove each voxelwise variable from the formula
-    #             vars.rhs_termlist.remove(patsy.Term([patsy.EvalFactor(term)]))
-    #     if coerce_str:                                                              #Convert categorical strings to integer codes **before** patsy processes them
-    #         for col in data_df.columns:                     
-    #             if col not in voxelwise_variable_list:
-    #                 data_df[col], _ = pd.factorize(data_df[col])               # factorize categorical variables, but not the voxelwise ones
-    #     y, X = patsy.dmatrices(vars, data_df, return_type='dataframe')
-    #     if y.shape[1] == 2:  # Remove second column in binomial case
-    #         y = y.iloc[:, [0]]
-    #     if add_intercept==False:                                                    # reinsert the voxelwise variable
-    #         X.pop('Intercept')
-    #     if voxelwise_variable_list is not None:                                     # reinsert the voxelwise variable
-    #         for term in voxelwise_variable_list:
-    #             X[term] = data_df[term]
-    #     return y, X
-    
     def define_design_matrix(self, formula, data_df, voxelwise_variable_list=None, coerce_str=False, add_intercept=True, voxelwise_interaction_terms=None):
         """
         Defines the design matrix while handling voxelwise variables and optional preprocessing.

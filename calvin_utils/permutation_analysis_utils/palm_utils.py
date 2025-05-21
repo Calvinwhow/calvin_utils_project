@@ -27,8 +27,11 @@ class CalvinPalm:
         self.output_dir = output_dir
         self.df = None
         self.design_matrix = None
-        if not os.path.exists(output_dir):
-            os.makedirs(output_dir)
+        self._prep_dir()
+        
+    def _prep_dir(self):
+        if self.output_dir is not None:
+            os.makedirs(self.output_dir, exist_ok=True)
     
     def read_data(self):
         """

@@ -59,10 +59,10 @@ class ResampleVisualizer:
             
     def get_black_to_grey_colormap_abrupt(self):
         return LinearSegmentedColormap.from_list("black_grey_abrupt", [
-            (0.0, self.BLACK),
-            (0.5, self.BLACK),
-            (0.50001, self.GREY),
-            (1.0, self.GREY)
+            (0.0, self.GREY),
+            (0.5, self.GREY),
+            (0.50001, self.BLACK),
+            (1.0, self.BLACK)
         ])
 
     def compute_line_colors_abrupt(self):
@@ -90,10 +90,10 @@ class ResampleVisualizer:
         return {"p": p_val, "ci_lower": ci_lower, "ci_upper": ci_upper, "mean_delta": mean_delta}
 
     def plot_paired_slopes(self, ax):
-        self.plot_resample_dots(ax, self.stat_array_2, 1, self.GREY)
-        self.plot_resample_dots(ax, self.stat_array_1, 0, self.BLACK)
+        self.plot_resample_dots(ax, self.stat_array_1, 1, self.GREY)
+        self.plot_resample_dots(ax, self.stat_array_2, 0, self.BLACK)
         for i in range(len(self.stat_array_1)):
-            ax.plot([0, 1], [self.stat_array_1[i], self.stat_array_2[i]], color=self.colors[i], linewidth=2, alpha=0.8)
+            ax.plot([0, 1], [self.stat_array_2[i], self.stat_array_1[i]], color=self.colors[i], linewidth=2, alpha=0.8)
         self.setup_slope_subplot(ax)
 
     def plot_resample_dots(self, ax, y_vals, x_coord, color, size=150):
@@ -102,7 +102,7 @@ class ResampleVisualizer:
 
     def setup_slope_subplot(self, ax):
         ax.set_xticks([0, 1])
-        ax.set_xticklabels([self.model1_name, self.model2_name])
+        ax.set_xticklabels([self.model2_name, self.model1_name])
         ax.set_title(f"Paired {self.stat}", fontsize=20)
         ax.set_ylabel(f"{self.stat}", fontsize=20)
         ax.set_xlim(-0.5, 1.5)
@@ -127,7 +127,8 @@ class ResampleVisualizer:
         right_density = np.sum(self.delta_r2 >= 0)
         x_text = -0.9 * abs_limit if left_density < right_density else 0.9 * abs_limit
         ha_text = 'left' if left_density < right_density else 'right'
-        ci_text = f"Δ{self.stat} = {mean_delta:.4f}\nCI: [{ci_lower:.4f}, {ci_upper:.4f}]\np = {1-p:.4f}"
+        p_val = 1 - p if p > 0.5 else p
+        ci_text = f"Δ{self.stat} = {mean_delta:.4f}\nCI: [{ci_lower:.4f}, {ci_upper:.4f}]\np = {p_val:.4f}"
         ax.text(x_text, ymax_padded * 0.9, ci_text, ha=ha_text, va='top', fontsize=14, color=self.BLACK)
 
     def draw(self):

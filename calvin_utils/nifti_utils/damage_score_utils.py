@@ -108,9 +108,10 @@ class DamageScorer:
         '''Calculate the normalized dot product (average of the dot product)'''
         dot_product = np.dot(array1, array2)
         if denominator == 'array_1':
-            non_zero_elements = np.count_nonzero(array1)
+            non_zero_elements = np.count_nonzero( ~np.isnan(array1) & (array1 > 0))
+           
         else:
-            non_zero_elements = np.count_nonzero(array2)
+            non_zero_elements = np.count_nonzero( ~np.isnan(array2) & (array2 > 0))
         if non_zero_elements == 0:
             return 0  # Avoid division by zero
         return dot_product / non_zero_elements
@@ -153,6 +154,7 @@ class DamageScorer:
         for roi in self.roi_df.columns:
             for subject in self.dv_df.columns:
                 self._calculate_metrics(damage_df, self.dv_df, self.roi_df, roi, subject, metrics)
+        damage_df.index.name = 'path'
         return damage_df
     
     def save_csv_to_metadata(self, df, root_dir, analysis='atrophy_results', ses=None, dry_run=True):

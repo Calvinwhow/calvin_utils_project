@@ -4,6 +4,73 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 from scipy.stats import spearmanr, pearsonr, kendalltau
 
+def simple_scatter(df, x_col, y_col, dataset_name, out_dir, y_label='y Axis', x_label='x Axis', flip_axes=False):
+    """
+    Generate and save a scatterplot of x_col vs. y_col with Spearman and Pearson correlation.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        DataFrame containing the data.
+    x_col : str
+        Name of the column for the X-axis.
+    y_col : str
+        Name of the column for the Y-axis.
+    dataset_name : str
+        Name of the dataset (used for title and filename).
+    out_dir : str
+        Directory to save the plot.
+    similarity_type : str
+        'cosine' or other, used for x-axis label.
+    flip_axes : bool
+        Plot X on Y and Y on X.
+    """
+    # Drop NaNs from both columns before plotting/correlation
+    valid_idx = df[[x_col, y_col]].dropna().index
+    x_vals = df.loc[valid_idx, x_col]
+    y_vals = df.loc[valid_idx, y_col]
+
+    rho, p = spearmanr(x_vals, y_vals, nan_policy='omit')
+    r, pr = pearsonr(x_vals, y_vals)
+
+    plot_df = pd.DataFrame({x_col: x_vals, y_col: y_vals})
+
+    plt.figure(figsize=(6, 6))
+    if flip_axes:
+        sns.lmplot(data=plot_df, x=y_col, y=x_col, height=6, aspect=1,
+                   scatter_kws={'alpha': 0.98, 'color': '#8E8E8E', 's': 150, 'edgecolors': 'white', 'linewidth': 2, 'zorder': 3},
+                   line_kws={'color': '#8E8E8E', 'zorder': 2})
+    else:
+        sns.lmplot(data=plot_df, x=x_col, y=y_col, height=6, aspect=1,
+                   scatter_kws={'alpha': 0.98, 'color': '#8E8E8E', 's': 150, 'edgecolors': 'white', 'linewidth': 2, 'zorder': 3},
+                   line_kws={'color': '#8E8E8E', 'zorder': 2})
+
+    plt.title(f"{dataset_name}", fontsize=20)
+    plt.xlabel(x_label, fontsize=20)
+    plt.ylabel(y_label, fontsize=20)
+
+    x_pos = 0.05
+    y_pos = 0.95 if rho > 0 else 0.15
+    plt.text(
+        x_pos, y_pos,
+        f"Rho = {rho:.2f}, p = {p:.2e}\nR = {r:.2f}, p = {pr:.2e}",
+        fontsize=16,
+        transform=plt.gca().transAxes,
+        verticalalignment='top',
+        bbox=dict(facecolor='white', alpha=0, edgecolor='none')
+    )
+
+    ax = plt.gca()
+    ax.tick_params(axis='both', labelsize=16)
+    for spine in ax.spines.values():
+        spine.set_linewidth(2)
+    
+    if out_dir is not None:
+        os.makedirs(os.path.join(out_dir, 'scatterplots'), exist_ok=True)
+        plt.savefig(os.path.join(out_dir, f"scatterplots/{dataset_name}_scatterplot.svg"), bbox_inches="tight")
+    plt.show()
+
+
 class ScatterplotGenerator:
     def __init__(self, dataframe, data_dict, x_label='xlabel', y_label='ylabel', correlation='pearson', palette='tab10', out_dir=None, rows_per_fig=None, cols_per_fig=None, ylim=None, category_col=None, kde=False, swap_x_and_y=False):
         """

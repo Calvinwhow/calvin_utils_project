@@ -295,13 +295,13 @@ class LOOCVAnalyzer(ConvergentMapGenerator):
     def _prepare_train_dataset(self, i, dataset_names_list, test_dataset_name):
         if self.group_dict == {}:                                       # If empty, have all groups predict test data
             return dataset_names_list[:i] + dataset_names_list[i+1:]    # Return groups that aren't the test group
-        
+
         taining_dataset_list = []
         test_group = self.group_dict.get(test_dataset_name)             # If full, have opposite group predict test data
         for k,v in self.group_dict.items():
             if v != test_group: 
                 taining_dataset_list.append(k)                          # Aggregates all opposite group dataset names
-            
+
             if len(set(self.group_dict.values)) > 2:                         # Unclear how to handle the case where there are multiple groups
                 raise ValueError("Over 2 groups have been assigned in the group_dict argument. This is not yet supported.")
             if len(set(self.group_dict.values)) ==1:                         # Not possible
@@ -670,27 +670,44 @@ class LOOCVAnalyzer(ConvergentMapGenerator):
         sub_indep_var = indep_var[idx].flatten()
         return sub_niftis, sub_indep_var
     
-    def _compute_r_differences(self, roi1_map, roi2_map, dataset_names, method, n_iter, delta_r2):
+    def _compute_r_differences(self, roi1_map, roi2_map, dataset_names, method, n_iter, delta_r2, spearman=True):
         all_r_diffs = {}
         for dataset_name in dataset_names:
             r_diffs = []
-            for _ in tqdm(range(n_iter)):
-                data = self.data_loader.load_dataset(dataset_name)
-                test_niftis = CorrelationCalculator._check_for_nans(data['niftis'], nanpolicy='remove', verbose=False)
-                test_indep_var = CorrelationCalculator._check_for_nans(data['indep_var'], nanpolicy='remove', verbose=False)
-                sub_niftis, sub_indep_var = self._shuffle_for_roi_comparison(test_niftis, test_indep_var, method)
-                if self.similarity == 'cosine':
-                    sim1 = [self.cosine_similarity(n, roi1_map) for n in sub_niftis]; sim2 = [self.cosine_similarity(n, roi2_map) for n in sub_niftis]
-                else:
-                    sim1 = [pearsonr(n.flatten(), roi1_map.flatten())[0] for n in sub_niftis]; sim2 = [pearsonr(n.flatten(), roi2_map.flatten())[0] for n in sub_niftis]
+            iter_count = 0
+            with tqdm(total=n_iter) as pbar:
+                while iter_count < n_iter:
+                    data = self.data_loader.load_dataset(dataset_name)
+                    test_niftis = CorrelationCalculator._check_for_nans(data['niftis'], nanpolicy='remove', verbose=False)
+                    test_indep_var = CorrelationCalculator._check_for_nans(data['indep_var'], nanpolicy='remove', verbose=False)
+                    sub_niftis, sub_indep_var = self._shuffle_for_roi_comparison(test_niftis, test_indep_var, method)
+                    if self.similarity == 'cosine':
+                        sim1 = [self.cosine_similarity(n, roi1_map) for n in sub_niftis]
+                        sim2 = [self.cosine_similarity(n, roi2_map) for n in sub_niftis]
+                    else:
+                        sim1 = [pearsonr(n.flatten(), roi1_map.flatten())[0] for n in sub_niftis]
+                        sim2 = [pearsonr(n.flatten(), roi2_map.flatten())[0] for n in sub_niftis]
+                        
+                    if spearman:
+                        stat1 = spearmanr(sim1, sub_indep_var, nan_policy='omit')[0]
+                        stat2 = spearmanr(sim2, sub_indep_var, nan_policy='omit')[0]
+                    else:
+                        mask1 = ~np.isnan(sim1) & ~np.isnan(sub_indep_var)
+                        mask2 = ~np.isnan(sim2) & ~np.isnan(sub_indep_var)
+                        stat1 = pearsonr(np.array(sim1)[mask1], np.array(sub_indep_var)[mask1])[0]
+                        stat2 = pearsonr(np.array(sim2)[mask2], np.array(sub_indep_var)[mask2])[0]
+                    if np.isnan(stat1) or np.isnan(stat2):
+                        continue  # skip this iteration and do not increment iter_count
+                    if delta_r2:
+                        stat1 = stat1 ** 2
+                        stat2 = stat2 ** 2
                     
-                stat1 = pearsonr(sim1, sub_indep_var)[0]; stat2 = pearsonr(sim2, sub_indep_var)[0]
-                if delta_r2:
-                    stat1 = stat1 ** 2; stat2 = stat2 ** 2
-                delta = stat1 - stat2
-                r_diffs.append(delta)
-                for roi, stat in zip(['roi1', 'roi2'], [stat1, stat2]):
-                    self.r_values[roi].append(stat)
+                    delta = stat1 - stat2
+                    r_diffs.append(delta)
+                    for roi, stat in zip(['roi1', 'roi2'], [stat1, stat2]):
+                        self.r_values[roi].append(stat)
+                    iter_count += 1
+                    pbar.update(1)
             all_r_diffs[dataset_name] = r_diffs
         return all_r_diffs
         
@@ -736,16 +753,16 @@ class LOOCVAnalyzer(ConvergentMapGenerator):
     
     def compare_roi_correlations(self, roi1, roi2, method="bootstrap", n_iter=10000, delta_r2=True, seed=None):
         """Compare the correlation of two ROI maps with outcome variables using bootstrap or permutation test"""
-        dataset_names = list(self.corr_map_dict.keys())
-        self.r_values = {'roi1': [], 'roi2': []}
-        # Load both ROIs and apply the mask
         self.roi_path = roi1
         roi1_map = self.generate_convergent_roi()
         self.roi_path = roi2
         roi2_map = self.generate_convergent_roi()
+        
+        dataset_names = list(self.corr_map_dict.keys())
+        self.r_values = {'roi1': [], 'roi2': []}
+        
         all_r_diffs = self._compute_r_differences(roi1_map, roi2_map, dataset_names, method, n_iter, delta_r2)
         self.prob = self._calculate_probability(all_r_diffs, roi1_map, roi2_map, dataset_names, method, delta_r2)
-
 
 
 class CorrelationAnalysis:
