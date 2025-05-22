@@ -204,9 +204,12 @@ class DatasetNiftiImporter(GiiNiiFileImport):
         return nifti_residuals, indep_residuals
     
     def _save_residuals(self, dataset_dir, nifti_residuals_arr, indep_residuals_arr, covariates_arr):
-        np.save(os.path.join(dataset_dir, 'niftis.npy'), nifti_residuals_arr)
-        np.save(os.path.join(dataset_dir, 'indep_var.npy'), indep_residuals_arr)
-        np.save(os.path.join(dataset_dir, 'covariates.npy'), covariates_arr)
+        for fname, arr in zip(['niftis.npy', 'indep_var.npy', 'covariates.npy'],
+                      [nifti_residuals_arr, indep_residuals_arr, covariates_arr]):
+            fpath = os.path.join(dataset_dir, fname)
+            if os.path.exists(fpath):
+                os.remove(fpath)
+            np.save(fpath, arr)
         
     def _process_dataset(self, dataset, dataset_dir):
         niftis = self.data_dict[dataset]['niftis'] # Get the nifti

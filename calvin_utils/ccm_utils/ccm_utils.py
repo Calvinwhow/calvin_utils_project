@@ -1,21 +1,18 @@
-from nilearn import plotting
-import nibabel as nib
 import os
 import numpy as np
-from scipy.stats import spearmanr, pearsonr, rankdata
 import pandas as pd
+import nibabel as nib
+import seaborn as sns
+import matplotlib.pyplot as plt
 from tqdm import tqdm
+from nilearn import plotting
+from scipy.stats import spearmanr, pearsonr, rankdata
+from matplotlib.colors import TwoSlopeNorm, LinearSegmentedColormap
+import matplotlib.cm as cm
+
 from calvin_utils.ccm_utils.npy_utils import DataLoader
 from calvin_utils.ccm_utils.stat_utils import CorrelationCalculator
 from calvin_utils.ccm_utils.optimization import NiftiOptimizer
-import seaborn as sns
-from matplotlib.colors import TwoSlopeNorm
-import matplotlib.pyplot as plt
-import matplotlib.cm as cm
-from matplotlib.colors import LinearSegmentedColormap
-
-from calvin_utils.ccm_utils.stat_utils_jax import _calculate_pearson_r_map_jax, _rankdata_jax
-import time
 
 class ConvergentMapGenerator:
     def __init__(self, corr_map_dict, data_loader, mask_path=None, out_dir=None, weight=False, optimizer=False, align_all_maps=False):
@@ -232,6 +229,7 @@ class LOOCVAnalyzer(ConvergentMapGenerator):
             Similarity measure to use ('cos' for cosine similarity or other measures). Options: 'cosine' and 'spatial_correl'
             If 'spatial_correl', will use the weighted average map with spatial correlation (pearson r).
             If 'cosine', will use the agreement map with cosine similarity.
+            If 'avg_in_roi', will use dotproduct normalized to ROI volume. This is used with inverse maps to get spatial correlation of site to target map. 
             Default is 'spatial_correl'.
         optimizer : bool, optional
             If set to True, will call optimization.py and us gradient ascent to optimize the combination of maps into the composite map.
@@ -254,9 +252,11 @@ class LOOCVAnalyzer(ConvergentMapGenerator):
         self.group_dict = group_dict
         self.out_dir=out_dir
         self.datasets_to_flip = datasets_to_flip
+        self.flip_axes = False
         self.correlation_calculator = CorrelationCalculator(method=method, verbose=False, use_jax=False)
          
-    def run(self):
+    def run(self, flip_axes=False):
+        self.flip_axes = flip_axes
         self.results = self.perform_loocv()
         self.results_df = self.results_to_dataframe()
         self.results_df.to_csv(f'{self.out_dir}/loocv_results.csv')
@@ -407,8 +407,13 @@ class LOOCVAnalyzer(ConvergentMapGenerator):
             similarities = [self.cosine_similarity(patient_map, convergent_map) for patient_map in patient_maps]
         elif self.similarity == 'spatial_correl':
             similarities = [pearsonr(patient_map.flatten(), convergent_map.flatten())[0] for patient_map in patient_maps]
+        elif self.similarity == 'avg_in_roi':
+            similarities = [
+                np.dot(patient_map.flatten(), convergent_map.flatten()) / np.count_nonzero(~np.isnan(patient_map.flatten()) & (patient_map.flatten() !=0))
+                for patient_map in patient_maps
+            ]
         else:
-            raise ValueError("Invalid similarity measure (self.similarity). Please choose 'cos' or 'spatial_correl'.")
+            raise ValueError("Invalid similarity measure (self.similarity).")
         return similarities
     
     def cosine_similarity(self, a, b):
@@ -479,7 +484,7 @@ class LOOCVAnalyzer(ConvergentMapGenerator):
         else:
             return ci_lower, ci_upper, data[0]
 
-    def _generate_scatterplot(self, similarities, indep_var, dataset_name, flip_axes=False):
+    def _generate_scatterplot(self, similarities, indep_var, dataset_name):
         """
         Generate and save a scatterplot of similarity vs. outcome with Spearman correlation.
 
@@ -500,10 +505,10 @@ class LOOCVAnalyzer(ConvergentMapGenerator):
 
         # Create DataFrame for Seaborn
         df = pd.DataFrame({"Similarity": similarities, "Outcome": indep_var})
-        xlab = 'Cosine Similarity' if self.similarity == 'cosine' else 'Spatial Correlation'
+        
         # Create LM plot
         plt.figure(figsize=(6, 6))
-        if flip_axes:
+        if self.flip_axes:
             sns.lmplot(data=df, x="Outcome", y="Similarity", height=6, aspect=1, 
                scatter_kws={'alpha': 0.98, 'color': '#8E8E8E', 's': 150, 'edgecolors': 'white', 'linewidth': 2, 'zorder': 3}, 
                line_kws={'color': '#8E8E8E', 'zorder': 2})
@@ -514,8 +519,14 @@ class LOOCVAnalyzer(ConvergentMapGenerator):
 
         # Title with dataset name
         plt.title(f"{dataset_name}", fontsize=20)
+        
+        xlab = 'Cosine Similarity' if self.similarity == 'cosine' else 'Spatial Correlation'
+        ylab = 'Outcome'
+        if self.flip_axes:
+            ylab = xlab
+            xlab = 'Outcome'
         plt.xlabel(xlab, fontsize=20)
-        plt.ylabel("Outcome", fontsize=20)
+        plt.ylabel(ylab, fontsize=20)
 
         # Dynamically place stats inside the plot
         x_pos = 0.05 if rho > 0 else 0.05

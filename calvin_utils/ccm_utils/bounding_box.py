@@ -19,6 +19,7 @@ class NiftiBoundingBox:
         self._stacked_data = None
         self._voxel_size = None
         self.force_reslice = False
+        self.sign = None
 
     @property
     def bounding_box_affine(self):
@@ -58,7 +59,8 @@ class NiftiBoundingBox:
 
     def _generate_affine(self, min_coords):
         affine = np.eye(4)
-        affine[:3, :3] *= self.voxel_size
+        affine[:3, :3] *= self.voxel_size # set zooms
+        affine[0, 0] *= self.sign # set orientation
         affine[:3, 3] = min_coords
         return affine
 
@@ -77,6 +79,16 @@ class NiftiBoundingBox:
             end_coords.append(nii_end)
         return origin_coords, end_coords
     
+    def _check_signs(self):
+        '''Gather orientations and assess if reslicing is needed.'''
+        sign_list = []
+        for path in self.nifti_paths:
+            nii = nib.load(path)
+            sign_list.append( np.sign(np.diag(nii.affine[:3,:3])) )
+        if not np.all(np.all(np.array(sign_list) == np.array(sign_list)[0], axis=1)):
+            raise ValueError("Not all NIfTI files have the same orientation (sign of axes differs). Please reorient your images.")
+        self.sign = np.sign(np.array(sign_list)[0][0])
+    
     def _check_zooms(self):
         '''Gather zooms and to assess if reslicing is needed.'''
         zoom_list = []
@@ -87,19 +99,29 @@ class NiftiBoundingBox:
 
         # If they’re not all identical, enforce isotropic reslicing:
         if not np.allclose(zoom_array.min(axis=0), zoom_array.max(axis=0)):
-            # The largest dimension among any of the axes in any file to prevent aliasing
-            max_dim = zoom_array.max()
+            max_dim = zoom_array.max()  # The largest dimension among any of the axes in any file to prevent aliasing
             self.voxel_size = (max_dim, max_dim, max_dim)
             self.force_reslice = True
             print(f"Multiple different voxel sizes detected. Using isotropic voxel size = {self.voxel_size} (lowest resolution)")
         else:
             self.voxel_size = tuple(zoom_array[0])
             print(f"All files appear to have the same voxel sizes: {self.voxel_size}. No reslicing needed.")
+            
+    def _pick_xform_code(self):
+        """Return a single code to use for both qform/sform."""
+        codes = [nib.load(p).header['sform_code'] for p in self.nifti_paths]
+        codes = [int(c) for c in codes if c > 0] # keep only non-zero
+        if not codes:
+            return 1                       # nothing set → treat as scanner anat
+        if len(set(codes)) == 1:
+            return codes[0]                # all agree → preserve it
+        return 1                           # mixed: choose the *least specific* space (1) to avoid lying
 
     # Public functions
     def generate_bounding_box(self):
         '''Creates the bounding box encompassing the largest offset and farthest point from the smallest offset'''
         self._check_zooms()
+        self._check_signs()
         origin_coords, end_coords = self._generate_corner_coordinates()
 
         ultimate_origin = np.min(np.vstack(origin_coords), axis=0)
@@ -141,11 +163,12 @@ class NiftiBoundingBox:
         '''Save the nifti to a location of your choice. Call self._stacked_data to save the 4D nifti'''
         if self._stacked_data is None:
             raise ValueError("Stacked nifti data not generated yet.")
-
+        
+        code = self._pick_xform_code()
         header = nib.Nifti1Header()
         header.set_xyzt_units('mm')
-        header.set_sform(self._bounding_box_affine, code=1)
-        header.set_qform(self._bounding_box_affine, code=1)
+        header.set_sform(self._bounding_box_affine, code=code)
+        header.set_qform(self._bounding_box_affine, code=code)
         header.set_data_dtype(np.float32)
         header['descrip'] = 'Stacked NIfTI with spatially aligned volumes'
         stacked_img = nib.Nifti1Image(data, affine=self._bounding_box_affine, header=header)
