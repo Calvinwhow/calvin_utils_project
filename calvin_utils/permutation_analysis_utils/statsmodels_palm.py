@@ -121,7 +121,7 @@ class CalvinStatsmodelsPalm(CalvinPalm):
 
         Parameters:
         - column: str, the name of the column to evaluate
-        - condition: str, the condition to evaluate ('equal', 'above', 'below')
+        - condition: str, the condition to evaluate ('equal', 'above', 'below', 'not')
         - value: numeric or str, the value to compare against
 
         Returns:
