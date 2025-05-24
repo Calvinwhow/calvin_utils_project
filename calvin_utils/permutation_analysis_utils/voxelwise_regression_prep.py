@@ -1,8 +1,9 @@
 import os
+import json
 import numpy as np
 import nibabel as nib
-import json
 from tqdm import tqdm
+from scipy.stats import rankdata          # handles ties correctly
 
 class RegressionPrep:
     def __init__(self, design_matrix, contrast_matrix, outcome_df, out_dir,
@@ -13,16 +14,16 @@ class RegressionPrep:
         Initializes the RegressionPrep class.
 
         Parameters:
-        - design_matrix (pd.DataFrame): The design matrix containing scalar and voxelwise variables.
-        - contrast_matrix (np.ndarray or list): The contrast matrix specifying the contrasts of interest.
-        - outcome_df (pd.DataFrame): The outcome data, either scalar or voxelwise.
-        - out_dir (str): The output directory where processed data will be saved.
-        - voxelwise_variables (list, optional): List of voxelwise variable names. Defaults to None.
-        - voxelwise_interactions (list, optional): List of interaction terms involving voxelwise variables. Defaults to None.
-        - mask_path (str, optional): Path to the brain mask NIfTI file. Defaults to None.
-        - exchangeability_block (np.ndarray, optional): Exchangeability block for permutation testing. Defaults to None. Should be of shape (n_subjects,), and composed of integers which indicate exchangeability blocks.
-        - weights (np.ndarray, optional): Weights for a weighted regression. Defaults to None, which results in a typical (OLS) regression. If an array is passed, will result in a weighted regression. 
-        - data_transform_method (str, optional): Method to transform data ('standardize' or other). Defaults to 'standardize'.
+        - design_matrix (pd.DataFrame): DataFrame containing scalar and voxelwise variable columns for each subject.
+        - contrast_matrix (np.ndarray or list): Array or list specifying the contrasts of interest.
+        - outcome_df (pd.DataFrame): DataFrame containing the outcome variable(s), either scalar or voxelwise.
+        - out_dir (str): Output directory for saving processed data.
+        - voxelwise_variables (list of str, optional): Names of variables in design_matrix that are voxelwise (i.e., NIfTI paths per subject). Default is None.
+        - voxelwise_interactions (list of str, optional): List of interaction terms (e.g., 'age:voxelwise_var') involving voxelwise variables. Default is None.
+        - mask_path (str, optional): Path to a NIfTI mask file to restrict analysis to specific voxels. Default is None.
+        - exchangeability_block (np.ndarray, optional): 1D array of integers indicating exchangeability blocks for permutation testing. Default is None.
+        - weights (np.ndarray or list, optional): 1D array or list of positive floats specifying regression weights for each subject. Default is None (equal weights).
+        - data_transform_method (str, optional): Method for data transformation; options are 'standardize', 'rank', or None. Default is 'standardize'.
         """
         self.design_matrix = design_matrix
         self.contrast_matrix = contrast_matrix
@@ -98,13 +99,14 @@ class RegressionPrep:
         return stack 
     
     ### Data Preprocessing ###      
-    def _clean(self, arr, verbose=True):
+    def _clean(self, arr, verbose=False):
         '''Process the data'''
-        if verbose:
-            print(arr.shape)
+        if verbose: print(arr.shape)
         arr = self._handle_nans(arr)
         if self.data_transform_method=='standardize':
             arr = self._standardize(arr)
+        if self.data_transform_method=='rank':
+            arr = self._rank_across_subjects(arr)
         return arr
     
     def _handle_nans(self, arr, value=0):
@@ -114,14 +116,54 @@ class RegressionPrep:
         arr = np.nan_to_num(arr, nan=value, posinf=max_val, neginf=min_val)
         return arr                   
 
-    def _standardize(self, data, axis=0):
+    def _standardize(self, data: np.ndarray, axis: int = 0, skip_ordinals: bool = True, max_unique: int = 10):
         """
-        Z-score along the specified axis (default = subjects axis).
-        data : np.ndarray, shape (n_vox, n_sub)
+        Z-score along `axis` (default = subjects) for *any* rank.
+
+        * Ordinal-column skipping is applied **only** when `data.ndim == 2`.
+        * For 3-D tensors (subj, out, vox) every (out, vox) column is scaled.
+
+        Returns array of same shape.
         """
-        mean = np.mean(data, axis=axis, keepdims=True)
-        std  = np.std(data, axis=axis, keepdims=True)
-        return (data - mean) / (std + 1e-8)
+        # ---- constant columns check (all ranks) ----
+        std = data.std(axis=axis, keepdims=True)
+        scale_mask = std > 1e-12            # broadcastable mask
+
+        # ---- optional ordinal skip (only for 2-D matrices) ----
+        if skip_ordinals and data.ndim == 2:
+            uniq = np.apply_along_axis(lambda c: len(np.unique(c)), axis, data)
+            ordinal = uniq <= max_unique
+            scale_mask = scale_mask & ~ordinal[:, None]   # keepdims alignment
+
+        mean = data.mean(axis=axis, keepdims=True)
+
+        z = data.copy()
+        z = np.where(scale_mask, (data - mean) / (std + 1e-8), data)
+        return z
+
+    def _rank_across_subjects(arr: np.ndarray) -> np.ndarray:
+        """
+        Replace each column with its ranks (1..n_subj).
+        Works for 2-D (n_subj, n_feat) or 3-D (n_subj, k, n_vox).
+
+        Constant columns are returned unchanged.
+        """
+        subj = arr.shape[0]
+        flat = arr.reshape(subj, -1)                     # 2-D view (subj, Ncol)
+
+        # Vectorised two-pass argsort (fast, but ignores ties)
+        idx = np.argsort(flat, axis=0, kind='mergesort')
+        ranks = np.empty_like(flat, dtype=np.float32)
+        rows = np.arange(subj, dtype=np.float32)[:, None]
+        ranks[idx, np.arange(flat.shape[1])] = rows + 1  # 1-based ranks
+
+        # Identify constant columns and leave them unchanged
+        const_mask = flat.ptp(axis=0) == 0               # range == 0
+        if const_mask.any():
+            ranks[:, const_mask] = flat[:, const_mask]
+
+        return ranks.reshape(arr.shape)
+
     
     ### INTERNAL REGRESSION MATRIX PREP ####
     def _apply_interactions(self, voxelwise_data):

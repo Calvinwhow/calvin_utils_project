@@ -2,8 +2,93 @@ import json
 import numpy as np
 from scipy.stats import t
 from calvin_utils.ccm_utils.npy_utils import DataLoader
+import os
+from tqdm import tqdm
+import nibabel as nib
 
 class VoxelwiseRegression:
+    """
+    VoxelwiseRegression
+    A class for performing voxelwise linear regression analysis on neuroimaging data, supporting permutation-based inference and NIfTI output.
+    json_path : str
+        Path to a JSON file specifying the locations of input data arrays (design matrix, outcome data, contrasts, weights, etc.).
+    mask_path : str, optional
+        Path to a NIfTI mask file used for unmasking and saving results in brain space.
+    out_dir : str, optional
+        Directory where output NIfTI images and results will be saved.
+    Attributes
+    json_path : str
+        Path to the JSON configuration file.
+    mask_path : str or None
+        Path to the NIfTI mask file.
+    out_dir : str or None
+        Output directory for saving results.
+    data_loader : DataLoader
+        Loader for input data specified in the JSON file.
+    design_tensor : np.ndarray
+        Design matrix tensor (observations × predictors × voxels).
+    outcome_tensor : np.ndarray
+        Outcome data tensor (observations × regressions × voxels).
+    contrast_matrix : np.ndarray
+        Contrast matrix (contrasts × predictors).
+    exchangeability_blocks : np.ndarray or None
+        Exchangeability block labels for permutation testing.
+    weight_vector : np.ndarray
+        Weights for each observation.
+    n_obs : int
+        Number of observations.
+    n_preds : int
+        Number of predictors.
+    dim3_X : int
+        Number of voxels in the design tensor.
+    dim3_Y : int
+        Number of voxels in the outcome tensor.
+    n_contrasts : int
+        Number of contrasts.
+    n_voxels : int
+        Number of voxels (max of design and outcome).
+    n_outputs : int
+        Number of output channels in the outcome tensor.
+    Methods
+    -------
+    load_data()
+        Loads design, outcome, contrast, weights, and exchangeability block data from files.
+    set_variables()
+        Sets and returns key shape variables for the regression.
+    _get_targets(permutation)
+        Returns regressor, regressand, and weights, optionally permuting the outcome data.
+    _prep_targets(regressor, regressand, weights, voxel_idx, regression_idx=0)
+        Prepares X, Y, and W matrices for regression at a given voxel and output index.
+    get_r2(Y, Y_HAT, W, e=1e-6)
+        Computes R-squared for model fit.
+    apply_contrasts(XtX_inv, BETA, MSE, e=1e-6, get_p=False)
+        Applies contrast matrix to regression coefficients to compute t-values.
+    _run_regression(X, Y, W)
+        Runs weighted linear regression for a single voxel.
+    voxelwise_regression(permutation=False)
+        Performs voxelwise regression across all voxels, optionally with permutation.
+    _get_max_stat(arr, pseudo_var_smooth=True, t=75)
+        Computes the maximum (or high percentile) statistic for permutation testing.
+    run_permutation(n_permutations)
+        Runs permutation testing to compute FWE-corrected p-values for T and R2.
+    _unmask_array(data_array)
+        Unmasks a vectorized data array to full-brain NIfTI shape using the mask.
+    _save_map(map_data, file_name)
+        Saves a NIfTI image to disk after unmasking.
+    _save_nifti_maps()
+        Saves regression results (BETA, T, R2, and permutation-corrected maps) as NIfTI images.
+    full_multiout_regression()
+        Runs regression for all output channels in the outcome tensor.
+    run_all_outputs(n_permutations=0)
+        Runs regression and permutation testing for each output channel, saving results in subdirectories.
+    run(n_permutations=0)
+        Runs regression and permutation testing for the default output, saving results.
+    Notes
+    -----
+    - This class is designed for neuroimaging applications where voxelwise regression and permutation-based inference are required.
+    - Input data must be preprocessed and formatted as specified in the JSON configuration file.
+    - NIfTI output requires a valid mask file for unmasking vectorized results.
+    """
     def __init__(self, json_path, mask_path=None, out_dir=None):
         self.json_path = json_path
         self.mask_path = mask_path
@@ -252,6 +337,19 @@ class VoxelwiseRegression:
             self._save_nifti_maps()
 
     def run(self, n_permutations=0):
+        """
+        Executes the voxelwise regression analysis and optional permutation testing.
+        This method performs the following steps:
+            1. Runs the voxelwise regression and stores the resulting beta coefficients,
+               t-statistics, and R-squared values.
+            2. If `n_permutations` is greater than 0, performs permutation testing with
+               the specified number of permutations.
+            3. Saves the resulting statistical maps as NIfTI files.
+        Args:
+            n_permutations (int, optional): Number of permutations to run for permutation
+                testing. Defaults to 0 (no permutation testing).
+        """
+        
         self.BETA, self.T, self.R2 = self.voxelwise_regression()
         self.run_permutation(n_permutations)
         self._save_nifti_maps()

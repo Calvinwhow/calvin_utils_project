@@ -1,5 +1,6 @@
+import os
 import numpy as np
-import pandas as pd
+import nibabel as nib
 from calvin_utils.nifti_utils.generate_nifti import view_and_save_nifti
 from calvin_utils.nifti_utils.matrix_utilities import threshold_matrix, import_nifti_to_numpy_array, unmask_matrix, apply_mask_to_dataframe
 
@@ -35,38 +36,75 @@ class ConjunctionMap:
         self.output_name = output_name
         
         if mask_path:
-            self.mask = import_nifti_to_numpy_array(mask_path)
+            self.mask = import_nifti_to_numpy_array(mask_path).astype(bool)
         else:
             raise ValueError("Mask path is required. Please provide a valid mask path.")
-            
-    def threshold_matrices(self):
-        """
-        Apply threshold to both data frames using the imported function threshold_matrix.
-        """
-        self.df1_thresholded = threshold_matrix(self.df1, self.threshold1, direction=self.direction1)
-        self.df2_thresholded = threshold_matrix(self.df2, self.threshold2, direction=self.direction2)
-        
-    def perform_conjunction(self):
-        """
-        Perform conjunction analysis to identify strictly overlapping voxels.
-        """
-        self.df1_thresholded = self.df1_thresholded.astype(bool)
-        self.df2_thresholded = self.df2_thresholded.astype(bool)
-        
-        self.conjunction_df = self.df1_thresholded & self.df2_thresholded
+    @staticmethod
+    def _thresh(arr, thr, direction):
+        if direction == "keep_above":
+            return arr >= thr
+        if direction == "keep_below":
+            return arr <= thr
+        if direction in ("keep_between", "exclude_between"):
+            lo, hi = sorted(thr)
+            inside = (arr >= lo) & (arr <= hi)
+            return inside if direction == "keep_between" else ~inside
+        raise ValueError(f"Bad direction: {direction}")
 
-    def generate_save_and_view_nifti(self, output_dir=None, output_name=None):
-        """
-        Generate, save, and view the NIFTI file.
-        """
-        self.img = view_and_save_nifti(self.conjunction_df, out_dir=output_dir, output_name=output_name, ref_file=self.mask_path)
+    @staticmethod
+    def _clean(arr, fill=0.0):
+        vmax, vmin = np.nanmax(arr), np.nanmin(arr)
+        return np.nan_to_num(arr, nan=fill, posinf=vmax, neginf=vmin)
+
+    ### Helpers ###
+    def mask_matrices(self):
+        mflat = self.mask.flatten()
+        self.df1 = self.df1[mflat]
+        self.df2 = self.df2[mflat]
+
+    def clean_matrices(self):
+        self.df1 = self._clean(self.df1)
+        self.df2 = self._clean(self.df2)
+
+    def threshold_matrices(self):
+        self.keep1 = self._thresh(self.df1, self.threshold1, self.direction1)
+        self.keep2 = self._thresh(self.df2, self.threshold2, self.direction2)
+
+    def perform_conjunction(self):
+        self.keep_conj = self.keep1 & self.keep2                # bool 1-D
+        self.indices = np.where(self.keep_conj)[0]              # indices in mask-space
+
+    ### Plotting ###
+    def generate_save_and_view_nifti(self):
+        # build full-image 0/1 array
+        full = np.zeros(self.mask.size, dtype=np.uint8)
+        full[self.mask.flatten()] = self.keep_conj.astype(np.uint8)
+        full = full.reshape(self.mask.shape)
+
+        self.img = nib.Nifti1Image(full, affine=nib.load(self.mask_path).affine)
+        os.makedirs(self.output_dir, exist_ok=True)
+        out_path = os.path.join(self.output_dir, self.output_name)
+        nib.save(self.img, out_path)
+    
+    def get_html(self):
+        # build full-image 0/1 array
+        full = np.zeros(self.mask.size, dtype=np.uint8)
+        full[self.mask.flatten()] = self.keep_conj.astype(np.uint8)
+        full = full.reshape(self.mask.shape)
         
+        html = view_and_save_nifti(
+            full,
+            out_dir=self.output_dir,
+            output_name=self.output_name,
+            ref_file=self.mask_path,
+        )
+        return html
+
+    ### Public ###
     def run(self):
-        """
-        Run all methods in sequence.
-        """
+        self.mask_matrices()
+        self.clean_matrices()
         self.threshold_matrices()
         self.perform_conjunction()
-        self.generate_save_and_view_nifti(output_dir=self.output_dir, output_name=self.output_name)
-        
-        return self.img
+        self.generate_save_and_view_nifti()
+        return self.get_html()
