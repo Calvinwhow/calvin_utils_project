@@ -226,7 +226,7 @@ class LOOCVAnalyzer(ConvergentMapGenerator):
         n_bootstrap : int, optional
             Number of bootstrap samples to generate.
         similarity : str, optional
-            Similarity measure to use ('cos' for cosine similarity or other measures). Options: 'cosine' and 'spatial_correl'
+            Similarity measure to use between each subject map and the target map. 
             If 'spatial_correl', will use the weighted average map with spatial correlation (pearson r).
             If 'cosine', will use the agreement map with cosine similarity.
             If 'avg_in_roi', will use dotproduct normalized to ROI volume. This is used with inverse maps to get spatial correlation of site to target map. 
@@ -407,13 +407,18 @@ class LOOCVAnalyzer(ConvergentMapGenerator):
             similarities = [self.cosine_similarity(patient_map, convergent_map) for patient_map in patient_maps]
         elif self.similarity == 'spatial_correl':
             similarities = [pearsonr(patient_map.flatten(), convergent_map.flatten())[0] for patient_map in patient_maps]
-        elif self.similarity == 'avg_in_roi':
+        elif self.similarity == 'dotproduct_in_patient_map':
             similarities = [
                 np.dot(patient_map.flatten(), convergent_map.flatten()) / np.count_nonzero(~np.isnan(patient_map.flatten()) & (patient_map.flatten() !=0))
                 for patient_map in patient_maps
             ]
+        elif self.similarity == 'dotproduct_in_target_map':
+            similarities = [
+                np.dot(patient_map.flatten(), convergent_map.flatten()) / np.count_nonzero(~np.isnan(convergent_map.flatten()) & (convergent_map.flatten() !=0))
+                for patient_map in patient_maps
+            ]
         else:
-            raise ValueError("Invalid similarity measure (self.similarity).")
+            raise ValueError("Invalid similarity measure (self.similarity). Please choose 'cosine', 'spatial_correl', 'dotproduct_in_patient_map', 'dotproduct_in_target_map'")
         return similarities
     
     def cosine_similarity(self, a, b):

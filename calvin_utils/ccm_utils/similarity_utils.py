@@ -6,7 +6,7 @@ import seaborn as sns
 from nilearn import image
 from natsort import natsorted
 import matplotlib.pyplot as plt
-from scipy.stats import f_oneway, kruskal, ttest_1samp
+from scipy.stats import f_oneway, kruskal, ttest_1samp, pearsonr
 from statsmodels.stats.multicomp import pairwise_tukeyhsd
 from calvin_utils.ccm_utils.stat_utils import CorrelationCalculator
 
@@ -30,7 +30,10 @@ class SimilarityTester:
         self.out_dir = out_dir
         self.dep_var_df = self.prep_data(dep_var_df, align=align, reference=reference, flip_list=flip_list)
         self.indep_var_df = self.prep_data(indep_var_df, flip_list=flip_list)
-        self.xlabel=f'{method_choice.capitalize()} Similarity'
+        self.xlabel = self._setxlabel()
+        
+    def _setxlabel(self):
+        return f'{self.method_choice.capitalize()} Similarity'
         
     def prep_data(self, df, align=False, reference=None, flip_list=[]):
         df = self.apply_mask_to_dataframe(df)
@@ -359,6 +362,7 @@ class MapComparator(SimilarityTester):
         self.mask_path = mask_path  
         self.method_choice = method_choice
         self.out_dir = out_dir
+        self.xlabel = self._setxlabel()
         self.prep_dirs()
         self.indep_var_df = self.prep_data(indep_var_df, reference=reference, flip_list=flip_list)     
         
@@ -378,8 +382,6 @@ class MapComparator(SimilarityTester):
         Returns a DF where each column is a map to plot or a series of observations
         '''
         if self.method_choice=='damage':
-            # if self.indep_var_df.shape[1] > 1:
-            #     raise ValueError("Damage method only allows a single independent variable map.")
             return self.get_dmg_df(data_loader)
         else:
             return self.get_corr_df(data_loader)
@@ -413,16 +415,18 @@ class MapComparator(SimilarityTester):
 
             # Iterate through patient maps and compute the dot product with the independent variable map
             for patient, pt_idx, dataset_map_idx in self._get_patient_map_pair(nifti_data, len(data_loader.dataset_names_list)):
-                if self.similarity=='cosine': # Will measure cosine similarity, normalizing the dot product
+                if self.similarity == 'spatial_correlation':
+                    damage_values.append( ( pt_idx, (pearsonr(patient, self.iv_map)[0]) ))
+                if self.similarity == 'cosine':
                     damage_values.append( ( pt_idx, ( patient.T @ self.iv_map ) / ( np.linalg.norm(patient) * np.linalg.norm(self.iv_map) ) ) )
-                    self.xlabel = 'Cosine Similarity of ROI with Map'
-                elif self.similarity=='average':
-                    damage_values.append((pt_idx, (patient.T @ self.iv_map) / ( len(patient) ) ) )
-                    self.xlabel = 'Average Voxel Value in ROI'
-                else:   # will measure the simple dot product
-                    damage_values.append((pt_idx, patient.T @ self.iv_map))
-                    self.xlabel = 'Summated Voxel Value in ROI'
-
+                if self.similarity == 'sum':
+                    damage_values.append( ( pt_idx, ( patient.T @ self.iv_map )) )
+                elif self.similarity=='average_sub_in_target':
+                    damage_values.append( ( pt_idx, ( patient.T @ self.iv_map ) / len(self.iv_map) ) )
+                elif self.similarity=='average_target_in_subject':  
+                    damage_values.append( ( pt_idx, ( patient.T @ self.iv_map ) / len(patient) ) )
+                else:
+                    raise ValueError(f"Invalid similarity method: {self.similarity}. Choose from 'spatial_correlation', 'cosine', 'average_sub_in_target', or 'average_target_in_subject'.")
             # Store the damage values in the dictionary with patient indices as keys
             dmg_dict[dataset] = {pt_idx: dmg for pt_idx, dmg in damage_values}
         # Create a dataframe from the dictionary, filling missing values with NaN
