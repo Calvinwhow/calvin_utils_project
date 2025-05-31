@@ -27,19 +27,24 @@ Internal structure (readable sections, each with a docstring):
 """
 
 from __future__ import annotations
+
+import io
+import gzip
+import math
+import numpy as np
 from pathlib import Path
 from typing import Iterable
-import numpy as np
+from scipy.io import loadmat
+from nibabel.streamlines import load as _load_trk
+
+from pathlib import Path
+from typing import Iterable
 from vedo import Line, Plotter
 from vedo import Point as VPoint, Line as VLine         # avoid name clash
 from vedo.colors import build_lut, color_map
 from calvin_utils.tract_utils.fibsel import FiberSelector
 from calvin_utils.tract_utils.fibmerge import FiberMerger
 from calvin_utils.tract_utils.fibsave import FibSave
-try:  # optional .trk/.tck loading
-    from nibabel.streamlines import load as _load_trk
-except ModuleNotFoundError:
-    _load_trk = None
 
 class FiberStich:
     """
@@ -148,10 +153,7 @@ class FiberStich:
         
     def _get_steps(self):
         '''target max of 1000 fibers on screen at any time for processing purposes.'''
-        step = 1
-        if self._n > 1000:
-            step = 1000/self._n
-        return step
+        return max(1, self._n // 1000)
     
     @staticmethod
     def _decimate(arr: np.ndarray, step: int = 8):
@@ -231,13 +233,34 @@ class FiberStich:
                 if a.ndim != 2 or a.shape[1] != 3:
                     raise ValueError("Each streamline must be shaped (N, 3).")
                 yield a
+            return
+        src = Path(src)
+        ext = src.suffix.lower()
+        if src.name.endswith('.tt.gz') or ext == '.tt': 
+            yield from FiberStich._iter_tt(src)
         else:
-            src = Path(src)
-            if src.suffix.lower() not in {".trk", ".tck"}:
-                raise ValueError("File must have .trk or .tck extension")
-            if _load_trk is None:
-                raise ImportError("Install nibabel to load .trk/.tck files")
             yield from _load_trk(src).streamlines
+            
+    @staticmethod
+    def _iter_tt(src: Path) -> Iterable[np.ndarray]:
+        """Yield (N,3) float32 streamlines from a DSI-Studio TinyTrack file."""
+        if src.name.endswith(".tt.gz"):
+            with gzip.open(src, "rb") as f:
+                buf = f.read()
+            mat = loadmat(io.BytesIO(buf), squeeze_me=True, struct_as_record=False)
+        else:                                                # plain .tt
+            mat = loadmat(src, squeeze_me=True, struct_as_record=False)
+
+        tracks = mat.get("track")
+        if tracks is None:
+            raise ValueError("No variable named 'track' found in TT file")
+
+        # tracks is an object array: each element is an (N,3) numeric array
+        for tr in tracks:
+            arr = np.asarray(tr, dtype=np.float32)
+            if arr.ndim != 2 or arr.shape[1] != 3:
+                raise ValueError("Each streamline must be (N,3)")
+            yield arr / 32.0          # DSI-Studio stores vertices in 1/32-voxel
 
     ### Plotting Methods ###
     def _build_scene(self):
@@ -325,7 +348,6 @@ class FiberStich:
         # rebuild index-based lists
         self._highlighted = [remap[i] for i in self._highlighted]
         self._selected    = [remap[i] for i in self._selected]
-        # finished – scene already cleaned visually
 
     ### Selection Methods ###
     def _select(self, idx: int) -> None:
@@ -342,10 +364,9 @@ class FiberStich:
 if __name__ == "__main__":
     import numpy as np
     # Example: simulate three random fibers
-    # fibers = [np.cumsum(np.random.randn(n, 3), 0) for n in (20, 22, 24, 26, 28)]
-    # fibers ='/Users/cu135/Partners HealthCare Dropbox/Calvin Howard/resources/atlases/memory/fornix_tract.trk'
-    fibers = '/Users/cu135/Partners HealthCare Dropbox/Calvin Howard/resources/atlases/memory/fornix_tract_fibstitched.trk'
-    gui = FiberSelectionGUI(
+    fibers = [np.cumsum(np.random.randn(n, 3), 0) for n in (20, 22, 24, 26, 28)]
+    # fibers ='/Volumes/Expansion/atlases/tracts/circuit_of_papez/circuit_of_papez_BL.trk.gz'
+    gui = FiberStich(
         streamlines=fibers,
         window_title="Fiber-Selection GUI"
     )

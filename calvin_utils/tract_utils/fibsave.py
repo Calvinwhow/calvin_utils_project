@@ -54,7 +54,7 @@ class FibSave:
         self._gui = gui
         self._affine, self._hdr = np.eye(4), None
         self._fname = None
-        if orig_trk is not None and Path(orig_trk).is_file():
+        if isinstance(orig_trk, (str, os.PathLike, Path)) and Path(orig_trk).is_file():
             orig_trk = Path(orig_trk)
             t = nib.streamlines.load(str(orig_trk))
             self._affine = t.affine
