@@ -1,5 +1,5 @@
 """
-fiber_gui.py
+fibstitch.py
 ============
 
 Interactive streamline viewer + selector based on **vedo**.
