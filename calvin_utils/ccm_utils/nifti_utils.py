@@ -28,8 +28,7 @@ class DatasetNiftiImporter(GiiNiiFileImport):
             out_dir (str): The output directory where processed data and results will be saved.
             mask_path (str, optional): The file path to a NIfTI mask file. If provided, the mask will be applied to the data.
                                        Defaults to None.
-            regression_method (str, optional): The regression method to use. Options include 'tensor' and others.
-                                               Defaults to 'tensor'.
+            regression_method (str, optional): The regression method to use. Options include 'tensor', 'ols' or None. 
             data_transform_method (str, optional): The method for transforming the data. Options include 'standardize' and others.
                                                    Defaults to 'standardize'.
         Attributes:
