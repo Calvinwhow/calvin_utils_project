@@ -32,7 +32,8 @@ class SphereROIBuilder:
 
         if self.brain_img is not None:
             self._mni_coords_brain = self._voxelwise_mni_coords()
-            self._inside_brain = self.brain_img.get_fdata().ravel() == 1
+            # treat any positive value as brain (handles float masks)
+            self._inside_brain = self.brain_img.get_fdata().ravel() > 0
         else:
             self._mni_coords_brain = None
             self._inside_brain = None
@@ -133,16 +134,36 @@ class SphereROIBuilder:
     # ------------------------------------------------------------------ #
     @staticmethod
     def _normalize_coord_entry(entry) -> np.ndarray:
+        """Robustly coerce *entry* to an (n, 3) float array.
+
+        Accepts a single triplet or list‑of‑triplets, either as a Python object
+        or as a string representation (e.g. "[34,‑18,52]" or
+        "[[12,34,56], [-7,8,9]]").  Gives a clear error if **any** sub‑list is
+        missing a value.
+        """
         if isinstance(entry, str):
             entry = ast.literal_eval(entry.strip())
-        arr = np.asarray(entry, dtype=float)
-        if arr.ndim == 1:
-            if arr.size != 3:
-                raise ValueError("Coordinate must have 3 values.")
-            arr = arr[None]
-        if arr.ndim != 2 or arr.shape[1] != 3:
-            raise ValueError("Entry must be (n,3).")
-        return arr
+
+        # Allow bare scalars separated by comma/space ("x,y,z")
+        if isinstance(entry, (int, float)):
+            raise ValueError("Coordinate must have 3 values, got a scalar.")
+
+        # Make nested list structure explicit
+        if isinstance(entry, (list, tuple, np.ndarray)) and not any(
+            isinstance(x, (list, tuple, np.ndarray)) for x in entry
+        ):
+            entry = [entry]  # single triplet → wrap
+
+        # Validate each triplet length
+        cleaned: list[list[float]] = []
+        for triplet in entry:
+            if len(triplet) != 3:
+                raise ValueError(
+                    f"Every coordinate requires 3 elements; got {triplet} (len={len(triplet)})"
+                )
+            cleaned.append([float(v) for v in triplet])
+
+        return np.asarray(cleaned, dtype=float)
 
     # ------------------------------------------------------------------ #
     # Geometry helpers
@@ -167,7 +188,7 @@ class SphereROIBuilder:
     def _build_sphere_mask(self, centre: np.ndarray) -> np.ndarray:
         d = self._distances(centre, self._mni_coords_brain)
         mask = (d <= self.radius).astype(int).reshape(self.brain_img.shape)
-        mask[self.brain_img.get_fdata() != 1] = 0
+        mask[self.brain_img.get_fdata() <= 0] = 0
         return mask
 
     def _build_sphere(self, centre: np.ndarray, project_on_brain: bool) -> np.ndarray:
@@ -181,7 +202,6 @@ class SphereROIBuilder:
     # I/O helpers
     # ------------------------------------------------------------------ #
     def _prep_bids(self, sub: str, ses: str | None, suffix: str) -> tuple[Path, str]:
-        sub = str(sub)
         ses_part = f"ses-{ses}" if ses else "ses-01"
         roi_dir = self.out_dir / f"sub-{sub.replace(' ', '_')}" / ses_part / "roi"
         roi_dir.mkdir(parents=True, exist_ok=True)

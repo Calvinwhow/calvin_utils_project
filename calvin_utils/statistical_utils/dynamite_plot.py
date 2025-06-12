@@ -49,8 +49,8 @@ class DynamitePlotter:
         if len(unique_groups) != 2:
             raise ValueError("Must be two groups in group_col. Detected: ", len(df[group_col].unique()) )        
         group1, group2 = unique_groups
-        pos_group = df.loc[df[group_col] == group1, y_col].dropna()
-        neg_group = df.loc[df[group_col] == group2, y_col].dropna()
+        pos_group = df.loc[df[group_col] == group2, y_col].dropna()
+        neg_group = df.loc[df[group_col] == group1, y_col].dropna()
 
         # Stats
         t_stat, t_p = ttest_ind(pos_group, neg_group, equal_var=False)

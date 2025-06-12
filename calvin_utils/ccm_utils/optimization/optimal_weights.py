@@ -113,11 +113,11 @@ class WeightOptimizer:
     # ---------- second-stage blend optimiser ---------- #
     def blend_optimize(self, W_opt: np.ndarray, W_unw: np.ndarray, lam_delta: float = 0.05, lam_alpha: float = 0.01, n_grid: int = 200) -> tuple[float, np.ndarray]:
         """Search α∈[0,1] maximising J(alpha) by using switching function to blend optimal weights vs no weighting."""
-        delta_norm2 = np.linalg.norm(W_opt - W_unw) ** 2           # const
+                   # const
         def J(alpha: float) -> float:
             W = alpha * W_opt + (1 - alpha) * W_unw
             loss = self._loss(self.nifti._converge_maps(W))
-            penalty = lam_delta * (alpha ** 2) * delta_norm2 + lam_alpha * (alpha - 0.5) ** 2
+            penalty = (alpha)**2 * (np.linalg.norm(W_opt - W_unw) ** 2) # Penalizes as alpha increases, which corresponds to larger deviations from W_unw
             return loss - penalty
 
         alphas = np.linspace(0, 1.0, n_grid)

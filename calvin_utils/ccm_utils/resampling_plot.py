@@ -115,7 +115,7 @@ class ResampleVisualizer:
         ax.set_xlim([-abs_limit, abs_limit])
         ax.set_ylim([0, ymax_padded])
         ax.set_title(f"Δ{self.stat} Distribution", fontsize=20)
-        ax.set_xlabel(f"Additional Explained Variance (Δ{self.stat})", fontsize=20)
+        ax.set_xlabel(f"Additional {self.stat} (Δ{self.stat})", fontsize=20)
         ax.set_ylabel("Number of Resamples", fontsize=20)
         ax.tick_params(labelsize=16)
         ax.text(abs_limit * -0.95, ymax_padded * 0.95, f"Favours {self.model2_name}", ha='left', va='top', fontsize=16, color=self.BLACK)
