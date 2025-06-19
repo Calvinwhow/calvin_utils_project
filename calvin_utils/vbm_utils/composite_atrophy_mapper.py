@@ -21,7 +21,7 @@ def generate_norm(arr, atrophy_only=True):
 
 def prepocess_dict(d: dict) -> dict:
     d = copy.deepcopy(d)
-    d.pop('white_matter', None)
+    # d.pop('white_matter', None)
     if 'cerebrospinal_fluid' in d:
         d['cerebrospinal_fluid'] = -d['cerebrospinal_fluid']
     return d
