@@ -1,76 +1,55 @@
 import os
+import numpy as np
 import pandas as pd
 from tqdm import tqdm
 from typing import Tuple
 from itertools import combinations
 from calvin_utils.nifti_utils.generate_nifti import view_and_save_nifti
 
-
 def threshold_probabilities(patient_df: pd.DataFrame, threshold: float) -> pd.DataFrame:
     patient_df = patient_df.where(patient_df > threshold, 0)
     return patient_df
 
-def calculate_z_scores(control_df: pd.DataFrame, patient_df: pd.DataFrame, matter_type=None) -> pd.DataFrame:
+def calculate_z_scores(ctrl: pd.DataFrame, pat: pd.DataFrame, eps=1e-6) -> pd.DataFrame:
     """
-    Function to calculate voxel-wise mean, standard deviation for control group and z-scores for patient group.
+    Calculate voxel-wise z-scores for patients using control mean and std.
 
     Args:
-    control_df (pd.DataFrame): DataFrame where each column represents a control subject, 
-                               and each row represents flattened image data for a voxel.
-    patient_df (pd.DataFrame): DataFrame where each column represents a patient, 
-                               and each row represents flattened image data for a voxel.
+        ctrl (pd.DataFrame): Controls, columns are subjects, rows are voxels.
+        pat (pd.DataFrame): Patients, columns are subjects, rows are voxels.
+        eps (float): Avoid div by zero.
 
     Returns:
-    patient_z_scores (pd.DataFrame): DataFrame of voxel-wise z-scores calculated for each patient using control mean and std.
+        pd.DataFrame: Z-scores for each patient.
     """
-
-    # # Mask the dataframes to only consider tissues over acceptable probability thresholds
-    # # Using p>0.2, as typical masking to MNI152 segments uses P > 0.2 for a given segment
+    ctrl = threshold_probabilities(ctrl, threshold=0.2)  # Thresholding control probabilities
+    pat = threshold_probabilities(pat, threshold=0.2)    # Thresholding patient probabilities
     
-    # # Now you can use the function to apply a threshold to patient_df and control_df
-    threshold = 0.2
-    patient_df = threshold_probabilities(patient_df, threshold)
-    control_df = threshold_probabilities(control_df, threshold)
+    ctrl_arr = ctrl.values                    # (N_vox × N_ctrl)
+    pat_arr  = pat.values                     # (N_vox × N_pat)
+    mean = ctrl_arr.mean(axis=1, keepdims=True)  # (N_vox × 1)
+    std  = ctrl_arr.std(axis=1, ddof=0, keepdims=True) + eps  # (N_vox × 1)
+    z_arr = (pat_arr - mean) / std               # broadcasting (N_vox × N_pat)
+    return pd.DataFrame(z_arr, index=pat.index, columns=pat.columns), mean, std
 
-    # Calculate mean and standard deviation for each voxel in control group
-    control_mean = control_df.mean(axis=1)
-    control_std = control_df.std(axis=1)
+def process_atrophy(data_dict, ctrl_dict):
+    """Calculates z-scores and significant atrophy masks for each tissue type."""
+    zscore_dict = {}
+    zscore_mask_dict = {}
+    stats_dict = {}
 
-    # Initialize DataFrame to store patient z-scores
-    patient_z_scores = pd.DataFrame()
-
-    # Calculate z-scores for each patient using control mean and std
-    for patient in patient_df.columns:
-        patient_z_scores[patient] = (patient_df[patient] - control_mean) / control_std
-
-    return patient_z_scores
-
-def process_atrophy_dataframes(dataframes_dict, control_dataframes_dict):
-    """
-    Processes the provided dataframes to calculate z-scores and determine significant atrophy.
-
-    Parameters:
-    - dataframes_dict (dict): Dictionary containing patient dataframes.
-    - control_dataframes_dict (dict): Dictionary containing control dataframes.
-
-    Returns:
-    - tuple: A tuple containing two dictionaries - atrophy_dataframes_dict and significant_atrophy_dataframes_dict.
-    """
-    
-    atrophy_dataframes_dict = {}
-    significant_atrophy_dataframes_dict = {}
-
-    for k in dataframes_dict.keys():
-        atrophy_dataframes_dict[k] = calculate_z_scores(control_df=control_dataframes_dict[k], patient_df=dataframes_dict[k])
-        if k == 'cerebrospinal_fluid':
-            significant_atrophy_dataframes_dict[k] = atrophy_dataframes_dict[k].where(atrophy_dataframes_dict[k] > 2, 0)
+    for tissue in data_dict:
+        zscores, mean, std = calculate_z_scores(pat=data_dict[tissue], ctrl=ctrl_dict[tissue])
+        if tissue == 'cerebrospinal_fluid':
+            sig_mask = zscores.where(zscores > 2, 0)
         else:
-            significant_atrophy_dataframes_dict[k] = atrophy_dataframes_dict[k].where(atrophy_dataframes_dict[k] < -2, 0)
-        print('Dataframe: ', k)
-        display(dataframes_dict[k])
-        print('------------- \n')
-
-    return atrophy_dataframes_dict, significant_atrophy_dataframes_dict
+            sig_mask = zscores.where(zscores < -2, 0)
+            
+        zscore_dict[tissue] = zscores
+        zscore_mask_dict[tissue] = sig_mask
+        stats_dict[tissue] = (mean, std)
+        
+    return zscore_dict, zscore_mask_dict, stats_dict
 
 def save_nifti_to_bids(dataframes_dict, bids_base_dir, mask_path, analysis='tissue_segment_z_scores', ses=None, dry_run=True):
     """
@@ -86,39 +65,17 @@ def save_nifti_to_bids(dataframes_dict, bids_base_dir, mask_path, analysis='tiss
     - ses (str, optional): Session identifier. If None, defaults to '01'.
     - dry_run (bool, optional): If True, prints the output directory paths without saving files. 
                                     Defaults to True.
-
-    Note:
-    This function assumes a predefined BIDS directory structure and saves the NIFTI images 
-    accordingly. If `dry_run` is set to True, the function will only print the intended save 
-    paths without creating any files. To actually save the NIFTI images, set `dry_run` to False.
     """
+    def process_name(name):
+        """Process the subject name to ensure it is in BIDS format."""
+        for pattern in ['smwp1', 'smwp2', 'smwp3', 'mwp1', 'mwp2', 'mwp3', '_resampled', '.nii', '.nii.gz']:
+            name = name.replace(pattern, '')
+        return name
+    
     def construct_bids_path(bids_base_dir, sub_no, ses_no, analysis):
-        """
-        Constructs the BIDS-compliant output directory path.
-
-        Parameters:
-        - bids_base_dir (str): Base directory for BIDS structure.
-        - sub_no (str): Subject identifier.
-        - ses_no (str): Session identifier.
-        - analysis (str): Folder name.
-
-        Returns:
-        - str: Full path to the output directory.
-        """
         return os.path.join(bids_base_dir, f'sub-{sub_no}', f'ses-{ses_no}', analysis)
 
     def save_or_print_nifti(dataframe, col, out_dir, tissue_type, dry_run, mask_path):
-        """
-        Saves or prints the NIFTI file path for a given subject.
-
-        Parameters:
-        - dataframe (pd.DataFrame): DataFrame containing NIFTI data.
-        - col (str): Column name representing the subject.
-        - out_dir (str): Output directory path.
-        - tissue_type (str): Tissue type or category.
-        - dry_run (bool): If True, only prints the path; otherwise, saves the file.
-        - mask_path (str): File to use as mask
-        """
         output_name = f'sub-{col}_{tissue_type}'
         if dry_run:
             print(os.path.join(out_dir, output_name))
@@ -131,8 +88,8 @@ def save_nifti_to_bids(dataframes_dict, bids_base_dir, mask_path, analysis='tiss
     ses_no = ses if ses else '01'
 
     for tissue_type, dataframe in tqdm(dataframes_dict.items()):
+        dataframe = dataframe.rename(columns=process_name)
         for col in dataframe.columns:
-            sub_no = col
-            out_dir = construct_bids_path(bids_base_dir, sub_no, ses_no, analysis)
+            out_dir = construct_bids_path(bids_base_dir, col, ses_no, analysis)
             os.makedirs(out_dir, exist_ok=True)
             save_or_print_nifti(dataframe, col, out_dir, tissue_type, dry_run, mask_path)

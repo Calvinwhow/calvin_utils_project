@@ -29,62 +29,24 @@ def import_dataframes_by_tissue(base_directory, shared_glob_path, tissue_to_impo
 
     return dataframes_dict
 
-def import_control_dataframes(base_directory, control_grey_matter_glob_name_pattern, control_white_matter_glob_name_pattern, control_csf_glob_name_pattern):
+def import_segments(base_dir, gm_pattern, wm_pattern, csf_pattern) -> dict:
     """
-    Imports control dataframes from specified directories and glob name patterns.
+    Import control dataframes for grey matter, white matter, and CSF using specified glob patterns.
 
-    Parameters:
-    - base_directory (str): The base directory where the data resides.
-    - control_grey_matter_glob_name_pattern (str): Glob pattern for grey matter data.
-    - control_white_matter_glob_name_pattern (str): Glob pattern for white matter data.
-    - control_csf_glob_name_pattern (str): Glob pattern for cerebrospinal fluid data.
+    Args:
+        base_dir (str): Base directory containing the data.
+        gm_pattern (str): Glob pattern for grey matter files.
+        wm_pattern (str): Glob pattern for white matter files.
+        csf_pattern (str): Glob pattern for CSF files.
 
     Returns:
-    - dict: A dictionary containing control dataframes for grey matter, white matter, and cerebrospinal fluid.
+        dict: Dictionary with keys 'grey_matter', 'white_matter', 'cerebrospinal_fluid' and corresponding dataframes as values.
     """
-    
-    segments_dict = {
-        'grey_matter': {'path': base_directory, 'glob_name_pattern': control_grey_matter_glob_name_pattern},
-        'white_matter': {'path': base_directory, 'glob_name_pattern': control_white_matter_glob_name_pattern},
-        'cerebrospinal_fluid': {'path': base_directory, 'glob_name_pattern': control_csf_glob_name_pattern}
-    }
-
-    control_dataframes_dict = {}
-    for k, v in segments_dict.items():
-        control_dataframes_dict[k] = import_matrices_from_folder(connectivity_path=v['path'], file_pattern=v['glob_name_pattern']);
-        print(f'Imported data {k} data with {control_dataframes_dict[k].shape[0]} voxels and {control_dataframes_dict[k].shape[1]} patients')
-        print(f'Example subject filename: {control_dataframes_dict[k].columns[-1]}')
+    patterns = {'grey_matter': gm_pattern, 'white_matter': wm_pattern, 'cerebrospinal_fluid': csf_pattern}
+    dfs = {}
+    for tissue, pattern in patterns.items():
+        dfs[tissue] = import_matrices_from_folder(connectivity_path=base_dir, file_pattern=pattern)
+        print(f'Imported {tissue}: {dfs[tissue].shape[0]} voxels, {dfs[tissue].shape[1]} patients')
+        print(f'Example subject filename: {dfs[tissue].columns[-1]}')
         print('--------------------------------')
-
-    return control_dataframes_dict
-
-def import_dataframes_from_folders(base_directory, grey_matter_glob_name_pattern, white_matter_glob_name_pattern, csf_glob_name_pattern):
-    """
-    Imports dataframes from specified directories and glob name patterns.
-    
-    Parameters:
-    - base_directory (str): The base directory where the data resides.
-    - grey_matter_glob_name_pattern (str): Glob pattern for grey matter data.
-    - white_matter_glob_name_pattern (str): Glob pattern for white matter data.
-    - csf_glob_name_pattern (str): Glob pattern for cerebrospinal fluid data.
-    
-    Returns:
-    - dict: A dictionary containing dataframes for grey matter, white matter, and cerebrospinal fluid.
-    """
-    
-
-    segments_dict = {
-        'grey_matter': {'path': base_directory, 'glob_name_pattern': grey_matter_glob_name_pattern},
-        'white_matter': {'path': base_directory, 'glob_name_pattern': white_matter_glob_name_pattern},
-        'cerebrospinal_fluid': {'path': base_directory, 'glob_name_pattern': csf_glob_name_pattern}
-    }
-
-    dataframes_dict = {}
-
-    for k, v in segments_dict.items():
-        dataframes_dict[k] = import_matrices_from_folder(connectivity_path=v['path'], file_pattern=v['glob_name_pattern'])
-        print(f'Imported data {k} data with {dataframes_dict[k].shape[0]} voxels and {dataframes_dict[k].shape[1]} patients')
-        print(f'These are the filenames per subject {dataframes_dict[k].columns}')
-        print('--------------------------------')
-
-    return dataframes_dict
+    return dfs

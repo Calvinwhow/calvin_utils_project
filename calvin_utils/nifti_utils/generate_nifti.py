@@ -58,9 +58,9 @@ def nifti_from_matrix(matrix, output_file, ref_file=None, use_reference=True, us
     
     # Save the image to the output file
     if output_name is not None:
-        img.to_filename(os.path.join(output_file, f'{output_name}.nii'))
+        img.to_filename(os.path.join(output_file, f'{output_name}.nii.gz'))
     else:
-        img.to_filename(os.path.join(output_file, 'generated_nifti.nii'))
+        img.to_filename(os.path.join(output_file, 'generated_nifti.nii.gz'))
     if silent==False:
         print('Image saved to: \n', output_file)
     return img
