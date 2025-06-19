@@ -2,6 +2,7 @@ import pandas as pd
 from typing import Tuple
 from itertools import combinations
 import numpy as np
+import copy
 
 def generate_tensor(dict):
     arrays = [np.asarray(dict[k]) for k in dict.keys()]
@@ -12,21 +13,26 @@ def generate_tensor(dict):
         tensor[:, :, i] = arr  # shape (voxels, patients, V)
     return tensor
 
-def generate_norm(arr):
+def generate_norm(arr, atrophy_only=True):
     """Generates the L2 norm of a tensor"""
+    if atrophy_only:
+        arr = np.where(arr < 0, arr, 0)  # Only consider negative values for atrophy
     return np.sqrt(np.sum(arr**2, axis=2))
+
+def prepocess_dict(d: dict) -> dict:
+    d = copy.deepcopy(d)
+    d.pop('white_matter', None)
+    if 'cerebrospinal_fluid' in d:
+        d['cerebrospinal_fluid'] = -d['cerebrospinal_fluid']
+    return d
 
 def generate_norm_map(pt_dict, ctrl_dict, flip_csf=True) -> pd.DataFrame:
     """Generates a composite atrophy map with L2 norm of Z scores"""
-    if flip_csf:
-        print("Flipping CSF sign.")
-        if 'cerebrospinal_fluid' in pt_dict:
-            pt_dict['cerebrospinal_fluid'] = -pt_dict['cerebrospinal_fluid']
-        if 'cerebrospinal_fluid' in ctrl_dict:
-            ctrl_dict['cerebrospinal_fluid'] = -ctrl_dict['cerebrospinal_fluid']
+    pt_dict_processed = prepocess_dict(pt_dict)
+    ctrl_dict_processed = prepocess_dict(ctrl_dict)
             
-    ctrl_tensor = generate_tensor(ctrl_dict)
-    pt_tensor = generate_tensor(pt_dict)
+    ctrl_tensor = generate_tensor(ctrl_dict_processed)
+    pt_tensor = generate_tensor(pt_dict_processed)
     ctrl_norm = generate_norm(ctrl_tensor)
     pt_norm = generate_norm(pt_tensor)
     
