@@ -6,40 +6,62 @@ from typing import Tuple
 from itertools import combinations
 from calvin_utils.nifti_utils.generate_nifti import view_and_save_nifti
 
+def get_tiv(tissue_dict: dict[str, pd.DataFrame], voxel_res: float = 2.0) -> np.ndarray:
+    """
+    Return total intracranial volume (one scalar per patient).
+    Assumes each DataFrame has shape (n_voxels, n_subjects) and *modulated* intensities in mm³/voxel.
+    """
+    keys = ("grey_matter", "white_matter", "cerebrospinal_fluid")
+    missing = [k for k in keys if k not in tissue_dict]
+    if missing:
+        raise KeyError(f"Need GM, WM, and CSF. Missing {missing}")
+
+    voxel_sum = sum(tissue_dict[k].values for k in keys)      # (vox × subj)
+    tiv = voxel_sum.sum(axis=0) * voxel_res**3                 # (n_subjects,)
+    return tiv
+
+
 def threshold_probabilities(patient_df: pd.DataFrame, threshold: float) -> pd.DataFrame:
+    '''This step avoids generation of ridiculously high z-scores due to very low probabilities.'''
     patient_df = patient_df.where(patient_df > threshold, 0)
     return patient_df
 
-def calculate_z_scores(ctrl: pd.DataFrame, pat: pd.DataFrame, eps=1e-6) -> pd.DataFrame:
+def calculate_z_scores(ctrl: pd.DataFrame, pat: pd.DataFrame) -> pd.DataFrame:
     """
     Calculate voxel-wise z-scores for patients using control mean and std.
 
     Args:
         ctrl (pd.DataFrame): Controls, columns are subjects, rows are voxels.
         pat (pd.DataFrame): Patients, columns are subjects, rows are voxels.
-        eps (float): Avoid div by zero.
 
     Returns:
         pd.DataFrame: Z-scores for each patient.
     """
-    ctrl = threshold_probabilities(ctrl, threshold=0.2)  # Thresholding control probabilities
-    pat = threshold_probabilities(pat, threshold=0.2)    # Thresholding patient probabilities
-    
     ctrl_arr = ctrl.values                    # (N_vox × N_ctrl)
     pat_arr  = pat.values                     # (N_vox × N_pat)
     mean = ctrl_arr.mean(axis=1, keepdims=True)  # (N_vox × 1)
-    std  = ctrl_arr.std(axis=1, ddof=0, keepdims=True) + eps  # (N_vox × 1)
+    std  = ctrl_arr.std(axis=1, ddof=0, keepdims=True) # (N_vox × 1)
     z_arr = (pat_arr - mean) / std               # broadcasting (N_vox × N_pat)
     return pd.DataFrame(z_arr, index=pat.index, columns=pat.columns), mean, std
+
+def process_tissue(df, tiv):
+    '''This will threshold the probabilities and normalize by TIV.'''
+    df = threshold_probabilities(df, threshold=0.2)  # Thresholding control probabilities
+    return df / tiv[np.newaxis, :]  # Normalize by TIV
 
 def process_atrophy(data_dict, ctrl_dict):
     """Calculates z-scores and significant atrophy masks for each tissue type."""
     zscore_dict = {}
     zscore_mask_dict = {}
     stats_dict = {}
+    
+    pt_tiv = get_tiv(data_dict)    # Total Intracranial Volume for patients
+    ctrl_tiv = get_tiv(ctrl_dict)  # Total Intracranial Volume for controls
 
     for tissue in data_dict:
-        zscores, mean, std = calculate_z_scores(pat=data_dict[tissue], ctrl=ctrl_dict[tissue])
+        pat_df = process_tissue(data_dict[tissue], pt_tiv)  # Process patient data
+        ctrl_df = process_tissue(ctrl_dict[tissue], ctrl_tiv)
+        zscores, mean, std = calculate_z_scores(pat=pat_df, ctrl=ctrl_df)
         if tissue == 'cerebrospinal_fluid':
             sig_mask = zscores.where(zscores > 2, 0)
         else:

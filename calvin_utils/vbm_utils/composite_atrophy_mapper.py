@@ -21,12 +21,12 @@ def generate_norm(arr, atrophy_only=True):
 
 def prepocess_dict(d: dict) -> dict:
     d = copy.deepcopy(d)
-    # d.pop('white_matter', None)
+    d.pop('white_matter', None)
     if 'cerebrospinal_fluid' in d:
         d['cerebrospinal_fluid'] = -d['cerebrospinal_fluid']
     return d
 
-def generate_norm_map(pt_dict, ctrl_dict, flip_csf=True) -> pd.DataFrame:
+def generate_norm_map(pt_dict, ctrl_dict) -> pd.DataFrame:
     """Generates a composite atrophy map with L2 norm of Z scores"""
     pt_dict_processed = prepocess_dict(pt_dict)
     ctrl_dict_processed = prepocess_dict(ctrl_dict)
