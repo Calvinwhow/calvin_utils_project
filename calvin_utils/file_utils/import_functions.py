@@ -11,6 +11,7 @@ from tqdm import tqdm
 from nilearn import image
 from calvin_utils.ccm_utils.bounding_box import NiftiBoundingBox
 from calvin_utils.nifti_utils.generate_nifti import view_and_save_nifti
+from pathlib import Path
 
 class GiiNiiFileImport:
     """
@@ -176,50 +177,30 @@ class GiiNiiFileImport:
             return None
 
     def import_gifti_to_numpy_array(self, file_path):
-        """
-        Imports a GIFTI file and converts it to a NumPy array.
-
-        Args:
-            filepath: Absolute path to the GIFTI file.
-
-        Returns:
-            gifti_data: Data from the GIFTI file as a NumPy array.
-        """
+        """Imports a GIFTI file and converts it to a NumPy array."""
         try:
-            # Load the GIFTI file
             gifti_img = nib.load(file_path)
-
-            # Extract the data array from the GIFTI image
-            # This assumes the data is in the first darray; adjust as needed for your files
             gifti_data = gifti_img.darrays[0].data.flatten()
-
             return gifti_data
         except Exception as e:
             print("Error:", e)
             return None
         
     def identify_file_type(self, file_path: str) -> str:
-        """
-        Identifies whether a file is NIFTI or GIFTI based on its extension.
-
-        Parameters:
-        -----------
-        file_path : str
-            The file path to be checked.
-
-        Returns:
-        --------
-        str
-            'nii' if the file is a NIFTI file, 'gii' if it's a GIFTI file, or an empty string if neither.
-        """
-        if file_path.lower().endswith('.nii') or file_path.lower().endswith('.nii.gz'):
-            return 'nii'
-        elif file_path.lower().endswith('.gii') or file_path.lower().endswith('.gii.gz'):
-            return 'gii'
-        elif file_path.lower().endswith('.npy'):
-            return 'npy'
-        else:
-            return ''
+        """Identifies file extension"""
+        try:
+            p = Path(file_path)
+            ext = ''.join(p.suffixes).lower()
+            if ext in ['.nii', '.nii.gz']:
+                return 'nii'
+            elif ext in ['.gii', '.gii.gz']:
+                return 'gii'
+            elif ext == '.npy':
+                return 'npy'
+            else:
+                return ext
+        except Exception:
+            return 'unrecognized'
 
     def align_imported_matrices(self, file_paths):
         '''Using the affines of the imported matrices, we will create a bounding box that encompasses all the matrices and place them in it.'''
@@ -244,6 +225,8 @@ class GiiNiiFileImport:
             elif path == 'npy':
                 df = self.import_npy_to_numpy_array(file_path)
                 self.matrix_df = df #override the matrix_df with the new one
+            elif path == 'unrecognized':    
+                continue # Skip unrecognized files
             else:
                 raise RuntimeError(f"Failed to import file: {file_path}. Error: path type {path} is not yet implemented")
 

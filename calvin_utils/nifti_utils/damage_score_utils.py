@@ -68,6 +68,9 @@ class DamageScorer:
         '''Gets metric of damage between each independent variable nifti and dependent variable nifti'''
         subject_array = thresholded_df[subject].values
         roi_array = region_of_interest_df[roi].values
+        subject_array = np.nan_to_num(subject_array, nan=0.0, posinf=np.nanmax(subject_array[np.isfinite(subject_array)]) if np.isfinite(subject_array).any() else 0, neginf=np.nanmin(subject_array[np.isfinite(subject_array)]) if np.isfinite(subject_array).any() else 0)
+        roi_array = np.nan_to_num(roi_array, nan=0.0, posinf=np.nanmax(roi_array[np.isfinite(roi_array)]) if np.isfinite(roi_array).any() else 0, neginf=np.nanmin(roi_array[np.isfinite(roi_array)]) if np.isfinite(roi_array).any() else 0)
+        
         if 'spatial_correlation' in metrics:
             damage_df.loc[subject, f'{roi}_spatial_corr'] = self._calculate_spatial_correlation(subject_array, roi_array)
         if 'cosine' in metrics:
