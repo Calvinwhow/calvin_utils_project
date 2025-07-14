@@ -42,7 +42,7 @@ class RegressionPrep:
         os.makedirs(self.out_dir, exist_ok=True)
         
     ### setters and getters ###
-    def get_mask(self,):
+    def get_mask(self):
         return nib.load(self.mask_path).get_fdata().flatten() > 0 if self.mask_path else None
     
     def get_weights(self, values):

@@ -191,11 +191,11 @@ class GiiNiiFileImport:
         try:
             p = Path(file_path)
             ext = ''.join(p.suffixes).lower()
-            if ext in ['.nii', '.nii.gz']:
+            if any(e in ext for e in ['.nii', '.nii.gz']):
                 return 'nii'
-            elif ext in ['.gii', '.gii.gz']:
+            elif any(e in ext for e in ['.gii', '.gii.gz']):
                 return 'gii'
-            elif ext == '.npy':
+            elif any(e in ext for e in ['.npy']):
                 return 'npy'
             else:
                 return ext

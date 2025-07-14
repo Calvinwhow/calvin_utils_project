@@ -90,7 +90,7 @@ def save_nifti_to_bids(dataframes_dict, bids_base_dir, mask_path, analysis='tiss
     """
     def process_name(name):
         """Process the subject name to ensure it is in BIDS format."""
-        for pattern in ['smwp1', 'smwp2', 'smwp3', 'mwp1', 'mwp2', 'mwp3', '_resampled', '.nii', '.nii.gz']:
+        for pattern in ['_smwp1', '_smwp2', '_smwp3', '_mwp1', '_mwp2', '_mwp3' 'smwp1', 'smwp2', 'smwp3', 'mwp1', 'mwp2', 'mwp3', 'T1', '_resampled', '.nii', '.nii.gz']:
             name = name.replace(pattern, '')
         return name
     
