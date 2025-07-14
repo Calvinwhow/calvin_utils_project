@@ -90,15 +90,15 @@ def save_nifti_to_bids(dataframes_dict, bids_base_dir, mask_path, analysis='tiss
     """
     def process_name(name):
         """Process the subject name to ensure it is in BIDS format."""
-        for pattern in ['_smwp1', '_smwp2', '_smwp3', '_mwp1', '_mwp2', '_mwp3' 'smwp1', 'smwp2', 'smwp3', 'mwp1', 'mwp2', 'mwp3', 'T1', '_resampled', '.nii', '.nii.gz']:
+        for pattern in ['_smwp1', '_smwp2', '_smwp3', '_mwp1', '_mwp2', '_mwp3' 'smwp1', 'smwp2', 'smwp3', 'mwp1', 'mwp2', 'mwp3', '_T1', 'T1', '_resampled', 'resampled', '.nii', '.nii.gz']:
             name = name.replace(pattern, '')
         return name
     
     def construct_bids_path(bids_base_dir, sub_no, ses_no, analysis):
         return os.path.join(bids_base_dir, f'sub-{sub_no}', f'ses-{ses_no}', analysis)
 
-    def save_or_print_nifti(dataframe, col, out_dir, tissue_type, dry_run, mask_path):
-        output_name = f'sub-{col}_{tissue_type}'
+    def save_or_print_nifti(dataframe, col, ses, tissue_type, out_dir, dry_run, mask_path):
+        output_name = f'sub-{col}_ses-{ses}_{tissue_type}'
         if dry_run:
             print(os.path.join(out_dir, output_name))
         else:
@@ -114,4 +114,4 @@ def save_nifti_to_bids(dataframes_dict, bids_base_dir, mask_path, analysis='tiss
         for col in dataframe.columns:
             out_dir = construct_bids_path(bids_base_dir, col, ses_no, analysis)
             os.makedirs(out_dir, exist_ok=True)
-            save_or_print_nifti(dataframe, col, out_dir, tissue_type, dry_run, mask_path)
+            save_or_print_nifti(dataframe, col, ses, tissue_type, out_dir, dry_run, mask_path)
