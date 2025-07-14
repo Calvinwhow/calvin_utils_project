@@ -98,7 +98,7 @@ def save_nifti_to_bids(dataframes_dict, bids_base_dir, mask_path, analysis='tiss
         return os.path.join(bids_base_dir, f'sub-{sub_no}', f'ses-{ses_no}', analysis)
 
     def save_or_print_nifti(dataframe, col, ses, tissue_type, out_dir, dry_run, mask_path):
-        output_name = f'sub-{col}_ses-{ses}_{tissue_type}'
+        output_name = f'sub-{col}_{ses}_{tissue_type}'
         if dry_run:
             print(os.path.join(out_dir, output_name))
         else:
