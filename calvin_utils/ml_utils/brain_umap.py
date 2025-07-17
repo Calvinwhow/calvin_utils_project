@@ -5,7 +5,9 @@ import hdbscan
 import plotly.express as px
 import plotly.graph_objects as go
 import matplotlib.pyplot as plt
+import matplotlib.cm as cm
 from sklearn.preprocessing import StandardScaler
+import pandas as pd
 
 class BrainUmap:
     """
@@ -18,7 +20,7 @@ class BrainUmap:
 
     Parameters
     ----------
-    df : pandas.DataFrame
+    data : pandas.DataFrame or numpy.ndarray
         Each row is a voxel, each column is a map (subject or condition).  
         Shape = (n_voxels, n_maps).
     n_components : int, default 3
@@ -89,7 +91,7 @@ class BrainUmap:
     ...                         metric="correlation", cluster_voxels=True)
     >>> umap_runner.plot_embedding()
     """
-    def __init__(self, df, n_components=2, n_neighbors=15, min_dist=0.1, metric='correlation', projection="sphere", min_cluster_size=5, mask=None, verbose=True, cluster_voxels=False):
+    def __init__(self, data, n_components=2, n_neighbors=15, min_dist=0.1, metric='correlation', projection="sphere", min_cluster_size=5, mask=None, verbose=True, cluster_voxels=False):
         """
         metric: 'euclidean', 'manhattan', 'cosine', 'correlation', 'haversine', etc. (see umap.UMAP docs)
         min_dist recommendation: 0.1 (low for tight clusters, higher for more spread out embedding)
@@ -98,15 +100,23 @@ class BrainUmap:
         """
         self.verbose = verbose
         self.projection = projection
+        arr = self._get_arr(data)
         self.mask = self._get_mask(mask)
-        self.brain_array = self._mask_arr(df.values.T, cluster_voxels) # (N maps, N voxels)
+        self.brain_array = self._mask_arr(arr, cluster_voxels) # (N maps, N voxels)
         self.features = self._get_features()
         self.embedding = self._run_umap(n_components, n_neighbors, min_dist, metric)
         self.embedding = self._project_embedding()
         self.distances = self._compute_distance(metric, cluster_voxels)
         self.cluster_labels, self.cluster_probabilities, self.cluster_persistence = self._run_hdbscan(min_cluster_size, cluster_voxels)
     
-    ### Internal API ###
+    ### Setters and Getters ###
+    def _get_arr(self, data):
+        if isinstance(data, pd.DataFrame):
+            arr = data.values
+        else:
+            arr = np.asarray(data)
+        return arr.T
+        
     def _get_mask(self, path):
         '''Imports a nifti mask'''
         return nib.load(path).get_fdata().flatten() > 0 if path else None
@@ -120,10 +130,11 @@ class BrainUmap:
     def _get_features(self):
         """Creates voxel-wise feature vectors combining spatial and intensity information."""
         return StandardScaler().fit_transform(self.brain_array) # standardizes expecting (N maps, N voxels)
-
+    
+    ### Internal API ###
     def _run_umap(self, n_components, n_neighbors, min_dist, metric):
         """Runs UMAP dimensionality reduction."""
-        umapper = umap.UMAP(n_components=n_components, n_neighbors=n_neighbors, min_dist=min_dist, metric=metric)
+        umapper = umap.UMAP(n_components=n_components, n_neighbors=n_neighbors, min_dist=min_dist, metric=metric, random_state=42)
         return umapper.fit_transform(self.features) # learns on (N maps, N voxels)
     
     def _project_embedding(self, e=1e-20):
@@ -164,16 +175,19 @@ class BrainUmap:
         kwargs['allow_single_cluster'] = False          # False is standard HDBSCAN operation 
         clusterer = hdbscan.HDBSCAN(min_cluster_size=min_cluster_size, metric=metric, **kwargs).fit(arr)
         return clusterer.labels_, clusterer.probabilities_, clusterer.cluster_persistence_
-
-    ### Public API ###
-    def plot_embedding(self, *, point_size: int = 3):
-        import matplotlib.cm as cm
-        """Interactive scatter of the embedding using Plotly. Points coloured by cluster label, opacity by probability of belonging to a cluster."""
+    
+    def _get_opacity(self, override_probabilities):
+        probabilities = override_probabilities if override_probabilities is not None else self.cluster_probabilities
         labels_norm = (self.cluster_labels - np.min(self.cluster_labels)) / (np.ptp(self.cluster_labels) + 1e-6)
         colors = cm.get_cmap('viridis')(labels_norm)
-        colors[:, 3] = self.cluster_probabilities + ((1 - self.cluster_probabilities) / 2)
+        colors[:, 3] = probabilities + ((1 - probabilities) / 2)
         rgba_colors = [f'rgba({int(r*255)}, {int(g*255)}, {int(b*255)}, {a})' for r, g, b, a in colors]
+        return rgba_colors
 
+    ### Public API ###
+    def plot_embedding(self, *, point_size: int = 3, override_probabilities = None, verbose = True):
+        """Interactive scatter of the embedding using Plotly. Points coloured by cluster label, opacity by probability of belonging to a cluster."""
+        rgba_colors = self._get_opacity(override_probabilities)
         customdata = np.stack([self.cluster_labels, self.cluster_probabilities], axis=-1)
         if self.embedding.shape[1] == 2:
             fig = px.scatter(x=self.embedding[:, 0], y=self.embedding[:, 1], color=rgba_colors,
@@ -201,7 +215,8 @@ class BrainUmap:
             raise ValueError("Embedding must be 2D or 3D for plotting.")
 
         fig.update_layout(title="Interactive UMAP Embedding", template="plotly_white")
-        fig.show()
+        if verbose: fig.show()
+        return fig
 
     def run(self):
         '''Orchestrator method'''

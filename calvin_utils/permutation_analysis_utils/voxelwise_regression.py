@@ -139,13 +139,16 @@ class VoxelwiseRegression:
         return regressor, regressand, weights  
     
     def _prep_targets(self, regressor, regressand, weights, voxel_idx, regression_idx=0):
-        """Ensure shape of X, Y, and W matrices"""
-        if regressor.shape[2] == self.n_voxels:          # for voxel-wise design
+        """
+        Ensure shape of X, Y, and W matrices. 
+        If a regression_idx is provided, it selects the corresponding output channel. This enables multi-output regression.
+        """
+        if regressor.shape[2] == self.n_voxels:          # for voxel-wise design with potential multiple outputs
             X = regressor[:, :, voxel_idx]
         else:                                            # for broadcast design
             X = regressor[:, :, 0]                       
 
-        if regressand.shape[2] == self.n_voxels:         # for voxel-wise outcome
+        if regressand.shape[2] == self.n_voxels:         # for voxel-wise outcome with potential multiple outputs
             Y = regressand[:, regression_idx, voxel_idx]
         else:                                            # for multi-output voxel-wise outcome
             Y = regressand[:, regression_idx, 0]
@@ -205,19 +208,19 @@ class VoxelwiseRegression:
         R2 = self.get_r2(Y, Y_HAT, W)                                    # (n_voxels,) <- (n_sub, n_voxels) - (n_sub, n_voxels)
         return BETA, T, R2                                              # beta is (predictors,), while T and P are (contrasts,)
     
-    def voxelwise_regression(self, permutation=False):
+    def voxelwise_regression(self, permutation=False, regression_idx=0):
         '''Relies on hat matrix (X'@(X'X)^-1@X')@Y to calculate beta, t-values, and p-values'''
         BETA = np.zeros((self.n_preds, self.n_voxels))
         T = np.zeros((self.n_contrasts, self.n_voxels))
         R2 = np.zeros((1, self.n_voxels))        
         regressor, regressand, weights = self._get_targets(permutation)
         for idx in (range(self.n_voxels) if permutation else tqdm(range(self.n_voxels), desc='Running voxelwise regressions')):
-            X, Y, W = self._prep_targets(regressor, regressand, weights, idx)
+            X, Y, W = self._prep_targets(regressor, regressand, weights, idx, regression_idx)
             BETA[:,idx], T[:,idx], R2[:,idx] = self._run_regression(X, Y, W)
         return BETA, T, R2
     
     ### P-VALUE METHODS ###
-    def _get_max_stat(self, arr, pseudo_var_smooth=True, t=75):
+    def _get_max_stat(self, arr, pseudo_var_smooth=True, t=99.9):
         """Return the 99.9th percentile of the absolute values in arr. Or just the raw maximum if pseudo_var_smooth is false (this is subject to chaotic noise)."""
         if pseudo_var_smooth:        
             return np.nanpercentile(np.abs(arr), t, axis=1)  # Calculate along rows, ignoring NaNs
@@ -279,6 +282,23 @@ class VoxelwiseRegression:
         if not self.out_dir or not self.mask_path:
             return
         
+        # Save multi-output regression results
+        if hasattr(self, 'B_multi'):
+            for j in range(self.n_outputs):
+                for i in range(self.n_contrasts):
+                    beta_name = f"beta_predictor_{i}_output_{j}.nii.gz"
+                    self._save_map(self.B_multi[i, :, j], beta_name)
+        if hasattr(self, 'T_multi'):
+            for j in range(self.n_outputs):
+                for i in range(self.n_contrasts):
+                    t_name = f"contrast_{i}_tval_output_{j}.nii.gz"
+                    self._save_map(self.T_multi[i, :, j], t_name)
+        if hasattr(self, 'R2_multi'):
+            for j in range(self.n_outputs):
+                for i in range(self.n_contrasts):
+                    r2_name = f"R2_output_{j}.nii.gz"
+                    self._save_map(self.R2_multi[i, :, j], r2_name)
+        
         # Save betas: shape (n_preds, n_voxels)
         if hasattr(self, 'BETA'):
             for i in range(self.n_preds):
@@ -308,13 +328,17 @@ class VoxelwiseRegression:
             self._save_map(self.R2p, f"R2_pval_FWE.nii.gz")
 
     #### Public Code ####
-    def full_multiout_regression(self):
-        n_out = self.outcome_tensor.shape[1]
-        results = []
-        for j in range(n_out):
-            BETA, T, R2 = self.voxelwise_regression(regression_idx=j)
-            results.append((BETA, T, R2))
-        return results
+    def run_single_multiout_regression(self, permutation=False):
+        """Runs regression across all outputs a single time and returns the associated arrays."""
+        B_multi = np.zeros((self.n_contrasts, self.n_voxels, self.n_outputs))
+        T_multi = np.zeros((self.n_contrasts, self.n_voxels, self.n_outputs))
+        R2_multi = np.zeros((self.n_contrasts, self.n_voxels, self.n_outputs))
+        for j in range(self.n_outputs):
+            B_multi[:,:,j], T_multi[:,:,j], R2_multi[:,:,j] = self.voxelwise_regression(permutation=permutation, regression_idx=j)
+        
+        if permutation == False:            # Store the results in the class attributes for use later
+            self.B_multi, self.T_multi, self.R2_multi = B_multi, T_multi, R2_multi
+        return B_multi, T_multi, R2_multi
 
     def run_all_outputs(self, n_permutations=0):
         """

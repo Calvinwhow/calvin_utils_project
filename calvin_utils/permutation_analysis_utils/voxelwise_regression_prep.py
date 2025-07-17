@@ -3,7 +3,6 @@ import json
 import numpy as np
 import nibabel as nib
 from tqdm import tqdm
-from scipy.stats import rankdata          # handles ties correctly
 
 class RegressionPrep:
     def __init__(self, design_matrix, contrast_matrix, outcome_df, out_dir,
@@ -102,6 +101,7 @@ class RegressionPrep:
     def _clean(self, arr, verbose=False):
         '''Process the data'''
         if verbose: print(arr.shape)
+        
         arr = self._handle_nans(arr)
         if self.data_transform_method=='standardize':
             arr = self._standardize(arr)
@@ -113,8 +113,7 @@ class RegressionPrep:
         """Handles NaNs by replacing them (and pos/neg inf) with finite values."""
         max_val = np.nanmax(arr)
         min_val = np.nanmin(arr)
-        arr = np.nan_to_num(arr, nan=value, posinf=max_val, neginf=min_val)
-        return arr                   
+        return np.nan_to_num(arr, nan=value, posinf=max_val, neginf=min_val)
 
     def _standardize(self, data: np.ndarray, axis: int = 0, skip_ordinals: bool = True, max_unique: int = 10):
         """
@@ -163,7 +162,6 @@ class RegressionPrep:
             ranks[:, const_mask] = flat[:, const_mask]
 
         return ranks.reshape(arr.shape)
-
     
     ### INTERNAL REGRESSION MATRIX PREP ####
     def _apply_interactions(self, voxelwise_data):
@@ -200,13 +198,18 @@ class RegressionPrep:
         return tensor
     
     def _prepare_outcome_data(self):
+        """
+        Preps outcome data as shape (N_subj, N_outcomes, N_voxels).
+        Prepare outcome data from niftis (if voxelwise outcome) or dataframe (if not voxelwise). Enables multiple outcomes.
+        TODO: handle multiple voxelwise outcomes.
+        """
         outcome_colname = self.outcome_df.columns[0]
         if outcome_colname in self.voxelwise_variables:
             paths = self._prep_paths(self.outcome_df, outcome_colname)
             outcome_data = self._load_nifti_stack(paths)
-            outcome_data = outcome_data[:, None, :]
+            outcome_data = outcome_data[:, None, :]                             # shape (n_obs, 1, n_voxels)
         else:
-            outcome_data = self.outcome_df.values.astype(float)[:, None, :]
+            outcome_data = self.outcome_df.values.astype(float)[:, :, None]     # shape (n_obs, n_outcomes, 1)
         return outcome_data
     
     ### PUBLIC API ####
