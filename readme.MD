@@ -19,14 +19,9 @@ Calvin Utils is a Python package that provides a set of utility functions for va
     In VSCode extensions library (free)
     ```
 
-4. Nimlab (Required)
-    ```
-    https://github.com/nimlab/setup
-    ```
-
 ## Installation
 
-### Installing Directly from GitHub
+### Installing Directly from GitHub (Simply gets you access to most recent code, but you can't edit it)
 
 You can also install the package directly from the GitHub repository:
 
@@ -41,21 +36,27 @@ You can also install the package directly from the GitHub repository:
     pip install git+https://github.com/Calvinwhow/calvin_utils.git
     ```
 
-### Installing Interactively (from a local clone)
+### Installing Interactively (allows you to interact with the package to do edits)
 
-1. Clone the repository:
+1. Set directory
+
+    ```bash or cmd
+    cd /path/to/where/i/want/to/install/to
+    ```
+
+2. Clone the repository:
 
     ```bash or cmd
     git clone https://github.com/Calvinwhow/calvin_utils.git
     ```
 
-2. Navigate to the project directory:
+3. Navigate to the project directory:
 
     ```bash or cmd
     cd /path/to/where/you/cloned/this/to
     ```
 
-3. Install the package in editable mode:
+4. Install the package in editable mode:
 
     ```bash or cmd
     pip install -e .

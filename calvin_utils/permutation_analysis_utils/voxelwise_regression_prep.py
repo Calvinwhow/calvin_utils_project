@@ -140,7 +140,7 @@ class RegressionPrep:
         z = np.where(scale_mask, (data - mean) / (std + 1e-8), data)
         return z
 
-    def _rank_across_subjects(arr: np.ndarray) -> np.ndarray:
+    def _rank_across_subjects(self, arr: np.ndarray) -> np.ndarray:
         """
         Replace each column with its ranks (1..n_subj).
         Works for 2-D (n_subj, n_feat) or 3-D (n_subj, k, n_vox).
