@@ -88,6 +88,10 @@ class OverlapMap:
                 threshold = 0.1
             elif self.map_type == 'rfz':
                 threshold = 5.0
+            elif self.map_type == 'z':
+                threshold = 2.0
+            elif self.map_type == 'w':
+                threshold = 2.0
             else:
                 raise ValueError("For 'custom' map_type, you must provide manual_threshold.")
         else:
