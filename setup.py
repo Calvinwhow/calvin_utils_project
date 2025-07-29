@@ -29,7 +29,7 @@ setup(
         'tensorly==0.9.0',
         'sympy==1.13.1',
         'scikit-learn',
-        'scipy',
+        'scipy<1.13.0',
         'pytensor',
         'hdbscan',
         'umap-learn',
