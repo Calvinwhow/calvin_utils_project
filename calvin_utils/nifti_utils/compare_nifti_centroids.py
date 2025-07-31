@@ -1,7 +1,8 @@
 from glob import glob
 from pathlib import Path
 import pprint
-
+import os
+import pandas as pd
 import nibabel as nib
 import numpy as np
 from scipy.stats import ttest_ind
@@ -43,6 +44,7 @@ class NiftiCentroidStats:
     ):
         if n_centroids < 1:
             raise ValueError("n_centroids must be ≥ 1")
+        self.grp1_glob, self.grp2_glob = grp1_glob, grp2_glob
         self.n_centroids = n_centroids
         self.mirror = mirror and n_centroids > 1
         self.grp1_files = self._keep_nii(glob(grp1_glob, recursive=True))
@@ -109,6 +111,12 @@ class NiftiCentroidStats:
             ctrs = [idx[kmeans.labels_ == k].mean(0) for k in range(self.n_centroids)]
             ctrs.sort(key=lambda c: c[0])        # left → right order
         return np.vstack([self._voxel_to_world(c, img.affine) for c in ctrs])
+    
+    @staticmethod
+    def _centroid_from_csv(path, c1='X', c2='Y', c3='Z'):
+        '''Return centroid from CSV with cols: x, y, z'''
+        df = pd.read_csv(path, usecols=[c1, c2, c3])
+        return [df.to_numpy()]          # shape (n_samples, 3)
 
     # bucket‑by‑centroid arrays
     def _centroid_sets_for_group(self, files):
@@ -120,8 +128,13 @@ class NiftiCentroidStats:
         return [np.vstack(b) for b in buckets]
 
     def _get_centroid_sets_both(self):
-        return (self._centroid_sets_for_group(self.grp1_files),
-                self._centroid_sets_for_group(self.grp2_files))
+        '''Gets centroid directly from nifti or extracts from a CSV'''
+        if (os.path.splitext(self.grp1_glob)[1] == os.path.splitext(self.grp2_glob)[1]) and (os.path.splitext(self.grp1_glob)[1] == ".csv"):
+            return (self._centroid_from_csv(self.grp1_glob), 
+                    self._centroid_from_csv(self.grp2_glob))
+        else:
+            return (self._centroid_sets_for_group(self.grp1_files),
+                    self._centroid_sets_for_group(self.grp2_files))
 
     # ------------------------------------------------------------------ #
     # mirroring / merging
@@ -155,6 +168,9 @@ class NiftiCentroidStats:
 
     @staticmethod
     def _xyz_ttests(xyz1, xyz2):
+        # print(xyz1, xyz2)
+        # xyz1, xyz2 = np.array(xyz1)[np.newaxis, :], np.array(xyz2)[np.newaxis, :]
+        # print(xyz1, xyz2)
         if min(len(xyz1), len(xyz2)) < 2:
             return {ax: {'t': np.nan, 'p': np.nan} for ax in 'xyz'}
         return {ax: {'t': res.statistic, 'p': res.pvalue}
@@ -166,12 +182,12 @@ class NiftiCentroidStats:
     def _norm_stats_and_test(n1, n2):
         summary = {
             'merged': {
-                'group1': {'n': len(n1), 'mean': n1.mean(), 'std': n1.std(ddof=1)},
-                'group2': {'n': len(n2), 'mean': n2.mean(), 'std': n2.std(ddof=1)},
+                'group1': {'n': len(n1), 'mean': n1.mean(), 'std': n1.std(ddof=100)},
+                'group2': {'n': len(n2), 'mean': n2.mean(), 'std': n2.std(ddof=100)},
             }
         }
         t, p = (np.nan, np.nan) if min(len(n1), len(n2)) < 2 else \
-               ttest_ind(n1, n2, equal_var=False)
+               ttest_ind(n1, n2, equal_var=True)
         ttests = {'norm': {'t': t, 'p': p}}
         return summary, ttests
 
