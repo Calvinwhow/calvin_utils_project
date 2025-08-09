@@ -27,9 +27,9 @@ def organize_dcm_to_bids(src_root: str | Path, bids_root: str | Path, dcm_patter
         anat_dst = bids_root / ('sub-' + patient_dir.name) / "ses-01" / "ANAT"
         dcm_dst.mkdir(parents=True, exist_ok=True)
         anat_dst.mkdir(parents=True, exist_ok=True)
-
-        for scan_dir in filter(Path.is_dir, patient_dir.iterdir()):
-            if any(x in scan_dir.name.upper() for x in dcm_pattern_list):
-                shutil.copytree(scan_dir, dcm_dst / scan_dir.name, dirs_exist_ok=True)
+        
+        for glob_dir in filter(Path.is_dir, patient_dir.rglob('*/*')):
+            if any(x in glob_dir.name for x in dcm_pattern_list):
+                shutil.copytree(glob_dir, dcm_dst / glob_dir.name, dirs_exist_ok=True)
                 unmatched.discard(patient_dir.name)
     print("Unmatched files: ", unmatched)

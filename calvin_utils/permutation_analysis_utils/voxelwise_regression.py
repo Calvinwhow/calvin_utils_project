@@ -155,6 +155,60 @@ class VoxelwiseRegression:
         return X, Y, weights
     
     #### Regression Methods ####
+    def _clipped_sigmoid(self, a, eps=1e-9):
+        '''Returns a numerically stable sigmoid to get p(y|x)'''
+        out = np.empty_like(a, dtype=float)
+        pos = a >= 0
+        out[pos]  = 1.0 / (1.0 + np.exp(-a[pos]))
+        ea = np.exp(a[~pos])
+        out[~pos] = ea / (1.0 + ea)
+        return np.clip(out, eps, 1 - eps)
+
+    def _irls(self, X, Y, B, P, W, eps=1e-9):
+        '''IRLS from Newton-raphson rewritten in OLS form'''
+        V = P * (1.0 - P)                 # bernoulli probability variance function
+        V = np.maximum(V, eps)            # add numeric stability
+        s = np.sqrt(W*V)                  # sqrt of weights * bernoulli variance (effective weight). Scaled.
+
+        Z = (X@B) + ((Y - P) / V)         # current response 
+        Z_w = Z * s                       # gets Z weighed by ~scaled effective weights
+        
+        X_w = X * s[:, None]               # gets X weighed by ~scaled effective weights
+        XtX = X_w.T @ X_w                  # XTWX = covariance matrix = observed fisher info = observed hessian!
+        XtX_inv = np.linalg.pinv(XtX)      # estimate of cov(β)
+        
+        B_n = XtX_inv @ (X_w.T @ Z_w)
+        return B_n, XtX
+    
+    def _mahalanobis_norm_test(self, B_n, B, XtX, tol=1e-5):
+        '''Mahalanobis norm is the natural fit for IRLS'''
+        DB = B_n - B
+        return np.sqrt(DB @ XtX @ DB) < tol
+    
+    def _infinity_norm_test(self, B_n, B, tol=1e-8): 
+        '''Checks infinity norm'''
+        return np.max(np.abs(B_n - B)) < tol
+    
+    def _fit_logistic(self, X, Y, W, max_iter=50):
+        '''
+        IRLS for argmax(β) of:
+            log-likelihood(β) = Σ_i  W[YβX - log(1 + e^βX)]
+        which can be maximized with 
+        Bn = (XTWX)^-1 XTW_eZ_e <- used to update W 
+        z  = Xβ + ( (y - p) / p(1-p) )
+        n  = Xβ
+        '''
+        B = np.zeros(self.n_preds)       # init B
+        for _ in range(max_iter):
+            P = self._clipped_sigmoid(X@B)
+            B_n, XtX = self._irls(X, Y, B, P, W)
+            if self._mahalanobis_norm_test(B_n, B, XtX) or self._infinity_norm_test(B_n, B):
+                B = B_n
+                break
+            B = B_n
+        _, XtX = self._irls(X, Y, B, P, W)
+        return B, np.linalg.pinv(XtX)
+    
     def get_r2(self, Y, Y_HAT, W, e=1e-6):
         """
         Calculate R-squared value from 1 - SS_Residuals/SS_TotalObservations
@@ -166,7 +220,20 @@ class VoxelwiseRegression:
         SS_total = np.sum(W * (Y - Y_mean)**2)
         return 1 - (SS_residual / (SS_total+e))
     
-    def apply_contrasts(self, XtX_inv, BETA, MSE, e=1e-6, get_p=False):
+    def get_pseudo_r2(self, Y, W, P, eps=1e-9):
+        '''
+        Gets MacFadden Pseudo R^2 = 1 - (LL_o / LL)
+        ll_null = MLE(p) = avg(Y)
+        log-likelihood(β) = Σ_i  wᵢ[yᵢlog(pᵢ) + (1 - yᵢ) log(1 - pᵢ)]
+        These are challenging to interpret, but represent an acceptable measure of overall fit.
+        '''
+        P_null = np.clip(np.average(Y, weights=W), eps, 1 - eps) # clipped for numerical safety
+        ll_null = np.sum(W * (Y * np.log(P_null) + (1 - Y) * np.log(1 - P_null)))
+        ll_full = np.sum(W * (Y * np.log(P)      + (1 - Y) * np.log(1 - P     )))
+        R2 = np.array([1.0 - ll_full / ll_null])
+        return R2
+    
+    def apply_contrasts(self, XtX_inv, BETA, MSE, e=1e-6):
         """
         t = (C @ BETA) / sqrt(diag(C @ XtX_inv @ C.T) * MSE)
 
@@ -179,11 +246,18 @@ class VoxelwiseRegression:
         NUM = C @ BETA
         var_diag = np.diag(C @ XtX_inv @ C.T)  
         DEN = np.sqrt(var_diag * MSE)      
-        T = NUM / (DEN+e)
-        if get_p:
-            df = self.n_obs - self.n_preds
-            P = 2 * t.sf(np.abs(T), df=df)
-        return T
+        return NUM / (DEN+e)
+
+    def _run_logistic(self, X, Y, W, eps=1e-9):
+        """
+        Binomial logistic regression via IRLS (Y in {0,1}).
+        Returns: BETA (p,), T (n_contrasts,), R2 (McFadden) as (1,)
+        """
+        B, XTX_inv = self._fit_logistic(X, Y, W)
+        P = self._clipped_sigmoid(X @ B) # Gets probability, but clips for safety
+        T = self.apply_contrasts(XTX_inv, B, MSE=1.0) # set MSE=1 to get a Wald Statistic.
+        R2 = self.get_pseudo_r2(Y, W, P)
+        return B, T, R2
 
     def _run_regression(self, X, Y, W):
         """
@@ -205,7 +279,7 @@ class VoxelwiseRegression:
         dof = self.n_obs - self.n_preds                                 # scalar  <- (n_sub, ) - (n_cov, )
         mse = np.sum(W * residuals**2, axis=0) / dof                    # (n_voxels,) <- summed (n_sub, n_voxels) along n_sub
         T = self.apply_contrasts(XtX_inv, BETA, mse)                    # (n_cov, n_voxels) <- (n_cov, n_voxels) / (n_cov, n_voxels)
-        R2 = self.get_r2(Y, Y_HAT, W)                                    # (n_voxels,) <- (n_sub, n_voxels) - (n_sub, n_voxels)
+        R2 = self.get_r2(Y, Y_HAT, W)                                   # (n_voxels,) <- (n_sub, n_voxels) - (n_sub, n_voxels)
         return BETA, T, R2                                              # beta is (predictors,), while T and P are (contrasts,)
     
     def voxelwise_regression(self, permutation=False, regression_idx=0):

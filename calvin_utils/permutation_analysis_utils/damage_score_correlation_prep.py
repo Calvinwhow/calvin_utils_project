@@ -1,0 +1,196 @@
+import os
+import json
+import numpy as np
+import nibabel as nib
+from tqdm import tqdm
+
+class RegressionPrep:
+    def __init__(self, design_matrix, contrast_matrix, outcome_df, out_dir,
+                 voxelwise_variables=None, voxelwise_interactions=None,
+                 mask_path=None, exchangeability_block=None, weights=None,
+                 data_transform_method='standardize'):
+        """
+        Initializes the RegressionPrep class.
+
+        Parameters:
+        - design_matrix (pd.DataFrame): DataFrame containing scalar and voxelwise variable columns for each subject.
+        - contrast_matrix (np.ndarray or list): Array or list specifying the contrasts of interest.
+        - outcome_df (pd.DataFrame): DataFrame containing the outcome variable(s), either scalar or voxelwise.
+        - out_dir (str): Output directory for saving processed data.
+        - voxelwise_variables (list of str, optional): Names of variables in design_matrix that are voxelwise (i.e., NIfTI paths per subject). Default is None.
+        - voxelwise_interactions (list of str, optional): List of interaction terms (e.g., 'age:voxelwise_var') involving voxelwise variables. Default is None.
+        - mask_path (str, optional): Path to a NIfTI mask file to restrict analysis to specific voxels. Default is None.
+        - exchangeability_block (np.ndarray, optional): 1D array of integers indicating exchangeability blocks for permutation testing. Default is None.
+        - weights (np.ndarray or list, optional): 1D array or list of positive floats specifying regression weights for each subject. Default is None (equal weights).
+        - data_transform_method (str, optional): Method for data transformation; options are 'standardize', 'rank', or None. Default is 'standardize'.
+        """
+        self.design_matrix = design_matrix
+        self.contrast_matrix = contrast_matrix
+        self.outcome_df = outcome_df
+        self.voxelwise_variables = voxelwise_variables or []
+        self.voxelwise_interactions = [interaction.replace(' ', '') for interaction in (voxelwise_interactions or [])]
+        self.out_dir = out_dir
+        self.mask_path = mask_path
+        self.exchangeability_block = exchangeability_block
+        self.data_transform_method = data_transform_method
+        self.weights_vector = self.get_weights(weights)
+        self.mask = self.get_mask()
+        self.voxelwise_regressors = self._get_voxelwise_regressors()
+        self.design_tensor = self._get_design_tensor()
+        self.outcome_data = self._get_outcome_data()
+        os.makedirs(self.out_dir, exist_ok=True)
+        
+    ### setters and getters ###
+    def get_mask(self):
+        return nib.load(self.mask_path).get_fdata().flatten() > 0 if self.mask_path else None
+    
+    def get_weights(self, values):
+        n_obs = self.design_matrix.shape[0] if hasattr(self, 'design_matrix') else None
+        if values is None:
+            _weights = np.ones(n_obs, dtype=float)
+        else:
+            _weights = np.array(values, dtype=float)
+            _weights = _weights / np.sum(_weights)
+            if n_obs is not None and _weights.shape[0] != n_obs:
+                raise ValueError(f"weights must have same length as number of observations ({n_obs}), got {_weights.shape[0]}")
+            if np.any(np.isnan(_weights)):
+                raise ValueError("weights must not contain NaNs")
+            if np.any(_weights <= 0):
+                raise ValueError("weights must be positive")
+        return _weights
+    
+    def _get_voxelwise_regressors(self):
+        voxelwise_regressors = self._prepare_voxelwise_terms()
+        return self._apply_interactions(voxelwise_regressors)
+         
+    def _get_design_tensor(self):
+        design_tensor = self._prepare_design_matrix(self.voxelwise_regressors)
+        return self._clean(design_tensor)
+    
+    def _get_outcome_data(self):
+        outcome_data = self._prepare_outcome_data()
+        return self._clean(outcome_data)
+    
+   ### I/O ###
+    def _prep_paths(self, df, term):
+        """Ensure the result is a flat list of strings (paths)"""
+        paths = df[term].values
+        if isinstance(paths, np.ndarray):
+            paths = paths.flatten().tolist()
+        elif hasattr(paths, 'tolist'):
+            paths = paths.tolist()
+        paths = [str(p) for p in paths]
+        return paths
+    
+    def _load_nifti_stack(self, paths, dtype=np.float32):
+        """Return (n_subj, n_vox) float32 array, masked and z-scored."""
+        # ----- allocate once -----
+        first = nib.load(paths[0]).get_fdata(dtype=dtype).ravel()
+        vox_in_mask = self.mask.sum() if self.mask is not None else first.size
+        stack = np.empty((len(paths), vox_in_mask), dtype=dtype)   # subj × vox
+
+        # ----- fill -----
+        for k, p in enumerate(tqdm(paths, desc="Loading & masking")):
+            arr = nib.load(p).get_fdata(dtype=dtype).ravel()
+            if self.mask is not None:
+                arr = arr[self.mask]            # 1-D masked
+            stack[k, :] = arr                   # single write
+        return stack 
+    
+    ### Data Preprocessing ###      
+    def _clean(self, arr, verbose=False):
+        '''Process the data'''
+        if verbose: print(arr.shape)
+        
+        arr = self._handle_nans(arr)
+        if self.data_transform_method=='standardize':
+            arr = self._standardize(arr)
+        if self.data_transform_method=='rank':
+            arr = self._rank_across_subjects(arr)
+        return arr
+    
+    def _handle_nans(self, arr, value=0):
+        """Handles NaNs by replacing them (and pos/neg inf) with finite values."""
+        max_val = np.nanmax(arr)
+        min_val = np.nanmin(arr)
+        return np.nan_to_num(arr, nan=value, posinf=max_val, neginf=min_val)
+    
+    ### INTERNAL REGRESSION MATRIX PREP ####
+    def _apply_interactions(self, voxelwise_data):
+        '''Grabs the voxelwise data and multiplies it by the scalar term'''
+        for col in self.voxelwise_interactions:
+            term1, term2 = [x.strip() for x in (col.split(':') if ':' in col else col.split('*'))]
+            voxel_term = term1 if term1 in self.voxelwise_variables else term2
+            scalar_term = term2 if voxel_term == term1 else term1            
+            interaction_values = self.design_matrix[scalar_term].values.astype(float)
+            voxelwise_data[col] = voxelwise_data[voxel_term] * interaction_values
+        return voxelwise_data
+    
+    def _prepare_voxelwise_terms(self):
+        '''Prepares voxelwise regressors'''
+        voxelwise_data = {}
+        for term in self.voxelwise_variables:
+            if term in self.outcome_df.columns: # don't use the dependent variable
+                continue
+            paths = self._prep_paths(self.design_matrix, term)
+            stacked = self._load_nifti_stack(paths)
+            voxelwise_data[term] = stacked
+        return voxelwise_data
+    
+    def _prepare_design_matrix(self, voxelwise_regressors: dict[str, np.ndarray]):
+        """Build a design tensor of shape (n_obs, n_params, n_voxels)."""
+        n_obs, n_params = self.design_matrix.shape
+        vox = next(iter(voxelwise_regressors.values())).shape[1] if voxelwise_regressors else 1                         
+        tensor = np.empty((n_obs, n_params, vox), dtype=np.float32)
+        for j, col in enumerate(self.design_matrix.columns):
+            if col in voxelwise_regressors or col in self.voxelwise_interactions:
+                tensor[:, j, :] = voxelwise_regressors[col]
+            else:                                                     
+                tensor[:, j, :] = self.design_matrix[col].values[:, None]
+        return tensor
+    
+    def _prepare_outcome_data(self):
+        """
+        Preps outcome data as shape (N_subj, N_outcomes, N_voxels).
+        Prepare outcome data from niftis (if voxelwise outcome) or dataframe (if not voxelwise). Enables multiple outcomes.
+        TODO: handle multiple voxelwise outcomes.
+        """
+        outcome_colname = self.outcome_df.columns[0]
+        if outcome_colname in self.voxelwise_variables:
+            paths = self._prep_paths(self.outcome_df, outcome_colname)
+            outcome_data = self._load_nifti_stack(paths)
+            outcome_data = outcome_data[:, None, :]                             # shape (n_obs, 1, n_voxels)
+        else:
+            outcome_data = self.outcome_df.values.astype(float)[:, :, None]     # shape (n_obs, n_outcomes, 1)
+        return outcome_data
+    
+    ### PUBLIC API ####
+    def save_dataset(self):
+        dataset_dict = {
+            'voxelwise_regression': {
+                "design_matrix": f"{self.out_dir}/design_matrix.npy",
+                "contrast_matrix": f"{self.out_dir}/contrast_matrix.npy",
+                "outcome_data": f"{self.out_dir}/outcome_data.npy"
+            }
+        }
+        
+        np.save(f"{self.out_dir}/design_matrix.npy", self.design_tensor)
+        np.save(f"{self.out_dir}/contrast_matrix.npy", self.contrast_matrix)
+        np.save(f"{self.out_dir}/outcome_data.npy", self.outcome_data)
+        
+        if self.exchangeability_block is not None:
+            dataset_dict['voxelwise_regression']["exchangeability_block"] = f"{self.out_dir}/exchangeability_block.npy"
+            np.save(f"{self.out_dir}/exchangeability_block.npy", self.exchangeability_block)
+        if self.weights_vector is not None:
+            dataset_dict['voxelwise_regression']["weights_vector"] = f"{self.out_dir}/weights_vector.npy"
+            np.save(f"{self.out_dir}/weights_vector.npy", self.weights_vector)
+        
+        with open(f"{self.out_dir}/dataset_dict.json", "w") as f:
+            json.dump(dataset_dict, f, indent=4)
+        return dataset_dict, f"{self.out_dir}/dataset_dict.json"
+    
+    def run(self):
+        dataset_dict, json_path = self.save_dataset()
+        print("design_tensor shape:", self.design_tensor.shape)
+        print("outcome_data shape:", self.outcome_data.shape)
+        return dataset_dict, json_path

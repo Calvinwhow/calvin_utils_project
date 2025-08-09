@@ -263,6 +263,11 @@ class GiiNiiFileImport:
         file_paths = glob(glob_path)
         self.file_paths = file_paths
         return self.import_matrices(file_paths)
+    
+    def import_from_series(self):
+        print('Attempting to import from pandas series. Will fail unless a series is provided using df["path_column"]')
+        file_paths = list(self.import_path.to_numpy())
+        return self.import_matrices(file_paths)
 
     def detect_input_type(self):
         """
@@ -278,14 +283,20 @@ class GiiNiiFileImport:
         str
             'csv' if the input is a CSV file, 'folder' if it's a folder, or 'unsupported' if neither.
         """
-        if self.import_path.lower().endswith('.csv'):
+        if isinstance(self.import_path, pd.Series):
+            self.import_type = 'pd_series'
+        elif isinstance(self.import_path, (str, Path)) and str(self.import_path).lower().endswith('.csv'):
             self.import_type = 'csv'
-        else:
+        elif isinstance(self.import_path, (str, Path)):
             self.import_type = 'folder'
+        else:
+            raise ValueError(f"Unrecognized import_path type: {type(self.import_path)}")
     
     def import_data_based_on_type(self):
         self.detect_input_type()
-        if self.import_type == 'csv':
+        if self.import_type == 'pd_series':
+            return self.import_from_series()
+        elif self.import_type == 'csv':
             # Input is a CSV file
             return self.import_from_csv()
         elif self.import_type == 'folder':
@@ -372,7 +383,7 @@ class GiiNiiFileImport:
     
     def run(self):
         self.import_data_based_on_type()
-        return self.matrix_df
+        return self.matrix_df.T
 
 class ImportDatasetsToDict(GiiNiiFileImport):
     def __init__(self, df, dataset_col, nifti_col, indep_var_col, covariate_cols):

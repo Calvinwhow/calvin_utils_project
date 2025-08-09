@@ -4,7 +4,6 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
 import seaborn as sns
 
-
 class ResampleVisualizer:
     def __init__(self, stat_array_1, stat_array_2, model1_name="X", model2_name="Y", stat="R²", out_dir=None):
         """
@@ -131,7 +130,7 @@ class ResampleVisualizer:
         ci_text = f"Δ{self.stat} = {mean_delta:.4f}\nCI: [{ci_lower:.4f}, {ci_upper:.4f}]\np = {p_val:.4f}"
         ax.text(x_text, ymax_padded * 0.9, ci_text, ha=ha_text, va='top', fontsize=14, color=self.BLACK)
 
-    def draw(self):
+    def draw(self, name='delta_plot.svg'):
         hist_counts, _ = np.histogram(self.delta_r2, bins=40)
         ymax_padded = np.max(hist_counts) * 1.10
         abs_limit = np.max(np.abs(self.delta_r2))
@@ -158,7 +157,7 @@ class ResampleVisualizer:
         )
         # Save the figure
         if self.out_dir is not None:
-            save_path = os.path.join(self.out_dir, 'delta_plot.svg')
+            save_path = os.path.join(self.out_dir, name)
             fig.savefig(save_path, format='svg')
         plt.tight_layout()
         plt.show()

@@ -1,6 +1,5 @@
 import numpy as np
 import pandas as pd
-from nimlab import datasets as nimds
 from calvin_utils.nifti_utils.generate_nifti import view_and_save_nifti
 from calvin_utils.nifti_utils.matrix_utilities import view_nifti_html, import_nifti_to_numpy_array, unmask_matrix
 
@@ -54,8 +53,7 @@ class SensitivityTestMap:
         if mask_path:
             self.mask = import_nifti_to_numpy_array(mask_path)  # Replace with your import function
         else:
-            mask_img = nimds.get_img("mni_icbm152")
-            self.mask = mask_img.get_fdata()
+            self.mask = self.input_df.iloc[:,-1]
     
     def threshold_dataframe(self, threshold: float):
         """
