@@ -5,6 +5,8 @@ from calvin_utils.ccm_utils.npy_utils import DataLoader
 import os
 from tqdm import tqdm
 import nibabel as nib
+import statsmodels.api as sm
+from scipy.special import expit
 
 class VoxelwiseRegression:
     """
@@ -89,13 +91,15 @@ class VoxelwiseRegression:
     - Input data must be preprocessed and formatted as specified in the JSON configuration file.
     - NIfTI output requires a valid mask file for unmasking vectorized results.
     """
-    def __init__(self, json_path, mask_path=None, out_dir=None):
+    def __init__(self, json_path, mask_path=None, out_dir=None, regression_type='linear'):
         self.json_path = json_path
         self.mask_path = mask_path
         self.out_dir = out_dir
+        self.regression_type = regression_type
         self.data_loader = DataLoader(self.json_path)
         self.design_tensor, self.outcome_tensor, self.contrast_matrix, self.exchangeability_blocks, self.weight_vector = self.load_data()
         self.n_obs, self.n_preds, self.dim3_X, self.dim3_Y, self.n_contrasts, self.n_voxels, self.n_outputs = self.set_variables()
+        self._validate_regression_type()
         
     #### Setter/Getter methods ####
     def load_data(self):
@@ -113,6 +117,13 @@ class VoxelwiseRegression:
         n_obs_y, n_cols_Y, n_voxels_Y = self.outcome_tensor.shape
         n_contrasts, n_preds_cmx      = self.contrast_matrix.shape
         return n_obs, n_preds, n_voxels_X, n_voxels_Y, n_contrasts, max(n_voxels_X, n_voxels_Y), n_cols_Y
+    
+    def _validate_regression_type(self):
+        '''Validates the chosen regression type based on the columns of Y'''
+        if np.all(np.isin(self.outcome_tensor[...], [0,1])):
+            print(f"Outcome is all binary. You should ensure regression_type='logistic'. Detected regression_type: {self.regression_type}")
+        else:
+            print(f"Outcome is not all binary. You should ensure regression_type='linear'. Detected regression_type: {self.regression_type}")
 
     ### REGRESSION HELPERS ###
     def _get_targets(self, permutation):
@@ -155,6 +166,42 @@ class VoxelwiseRegression:
         return X, Y, weights
     
     #### Regression Methods ####
+    def stable_logit(X, y, sample_weights=None, add_intercept=False, eps=1e-9):
+        # sanitize
+        X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
+        y = np.nan_to_num(y, nan=0.0, posinf=0.0, neginf=0.0)
+
+        # fit with fallbacks
+        try:
+            res = sm.Logit(y, X).fit(disp=0, maxiter=200, method="newton")
+        except Exception:
+            try:
+                res = sm.Logit(y, X).fit(disp=0, maxiter=300, method="lbfgs")
+            except Exception:
+                # tiny ridge regularization fallback
+                res = sm.GLM(y, X, family=sm.families.Binomial()) \
+                    .fit_regularized(alpha=1e-6, L1_wt=0.0, maxiter=500)
+
+        B = np.asarray(res.params)
+        P = expit(X @ B)
+        P = np.clip(P, eps, 1 - eps)
+
+        # curvature weights at MLE
+        w = P * (1.0 - P)
+        if sample_weights is not None:
+            sw = np.asarray(sample_weights, float).ravel()
+            sw = np.nan_to_num(sw, nan=0.0, posinf=0.0, neginf=0.0)
+            w = w * sw
+
+        # X' W X and its (pseudo)inverse
+        XTWX = (X.T * w) @ X
+        try:
+            XTX_inv = np.linalg.inv(XTWX)
+        except np.linalg.LinAlgError:
+            XTX_inv = np.linalg.pinv(XTWX, rcond=1e-10)
+
+        return B, XTX_inv, P
+
     def _clipped_sigmoid(self, a, eps=1e-9):
         '''Returns a numerically stable sigmoid to get p(y|x)'''
         out = np.empty_like(a, dtype=float)
@@ -175,7 +222,11 @@ class VoxelwiseRegression:
         
         X_w = X * s[:, None]               # gets X weighed by ~scaled effective weights
         XtX = X_w.T @ X_w                  # XTWX = covariance matrix = observed fisher info = observed hessian!
-        XtX_inv = np.linalg.pinv(XtX)      # estimate of cov(β)
+        
+        try:
+            XtX_inv = np.linalg.inv(XtX)
+        except np.linalg.LinAlgError:
+            XtX_inv = np.linalg.pinv(XtX, rcond=1e-10)
         
         B_n = XtX_inv @ (X_w.T @ Z_w)
         return B_n, XtX
@@ -248,18 +299,29 @@ class VoxelwiseRegression:
         DEN = np.sqrt(var_diag * MSE)      
         return NUM / (DEN+e)
 
-    def _run_logistic(self, X, Y, W, eps=1e-9):
+    def _run_logistic(self, X, Y, W, vectorize=True):
         """
         Binomial logistic regression via IRLS (Y in {0,1}).
         Returns: BETA (p,), T (n_contrasts,), R2 (McFadden) as (1,)
         """
-        B, XTX_inv = self._fit_logistic(X, Y, W)
-        P = self._clipped_sigmoid(X @ B) # Gets probability, but clips for safety
-        T = self.apply_contrasts(XTX_inv, B, MSE=1.0) # set MSE=1 to get a Wald Statistic.
-        R2 = self.get_pseudo_r2(Y, W, P)
-        return B, T, R2
+        try:
+            if vectorize:
+                B, XTX_inv = self._fit_logistic(X, Y, W)
+                P = self._clipped_sigmoid(X @ B) # Gets probability, but clips for safety
+            else:
+                B, XTX_inv, P = self.stable_logit(X, Y, W, True)
+                    
+            T = self.apply_contrasts(XTX_inv, B, MSE=1.0) # set MSE=1 to get a Wald Statistic.
+            PR2 = self.get_pseudo_r2(Y, W, P)
+        except Exception as e:
+            if 'SVD did not converge' in str(e):        # SVD to invert XTX fails if zero variance (empty col), rank deficiency (permutation risk), perfect separation of Y (permutation risk), or numerical overflow (prophylaxed)
+                B = 0; T = 0; PR2 = 0
+            else:
+                print(f"A voxelwise regression failed: {e}. \n\tIf this occurs frequently, your data is ill-conditioned. Sorry!")
+                B = None; T = None; PR2 = None
+        return B, T, PR2
 
-    def _run_regression(self, X, Y, W):
+    def _run_linear(self, X, Y, W):
         """
         Runs a standard linear regression. Gets Betas and T values.
             
@@ -282,6 +344,14 @@ class VoxelwiseRegression:
         R2 = self.get_r2(Y, Y_HAT, W)                                   # (n_voxels,) <- (n_sub, n_voxels) - (n_sub, n_voxels)
         return BETA, T, R2                                              # beta is (predictors,), while T and P are (contrasts,)
     
+    def _run_regression(self, X, Y, W):
+        if self.regression_type=='linear':
+            return self._run_linear(X,Y,W)
+        elif self.regression_type=='logistic':
+            return self._run_logistic(X, Y, W)
+        else:
+            raise ValueError(f"Regression type {self.regression_type} not implemented. Please set regression_type='linear' or 'logistic'.")
+    
     def voxelwise_regression(self, permutation=False, regression_idx=0):
         '''Relies on hat matrix (X'@(X'X)^-1@X')@Y to calculate beta, t-values, and p-values'''
         BETA = np.zeros((self.n_preds, self.n_voxels))
@@ -290,6 +360,8 @@ class VoxelwiseRegression:
         regressor, regressand, weights = self._get_targets(permutation)
         for idx in (range(self.n_voxels) if permutation else tqdm(range(self.n_voxels), desc='Running voxelwise regressions')):
             X, Y, W = self._prep_targets(regressor, regressand, weights, idx, regression_idx)
+            if np.any(np.isnan(X)) or np.any(np.isnan(Y)) or np.any(np.isnan(W)):
+                print(f"NANS DETECTED: X: {np.any(np.isnan(X))}, Y: {np.any(np.isnan(Y))}, W: {np.any(np.isnan(W))}")
             BETA[:,idx], T[:,idx], R2[:,idx] = self._run_regression(X, Y, W)
         return BETA, T, R2
     

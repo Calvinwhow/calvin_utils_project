@@ -20,7 +20,41 @@ class CalvinStatsmodelsPalm(CalvinPalm):
         Reads data using the parent class method and displays the DataFrame.
         """
         data_df = super().read_data()
+        print(data_df)
         return data_df
+    
+    def _dmatrix_fallback(self, formula, data_df, voxelwise_variable_list=None, add_intercept=True, voxelwise_interaction_terms=None):
+        voxelwise_variable_list = voxelwise_variable_list or []
+        voxelwise_interaction_terms = voxelwise_interaction_terms or []
+
+        # Parse and strip voxelwise terms from RHS before Patsy sees them
+        desc = patsy.ModelDesc.from_formula(formula)
+        keep_terms = []
+        for term in desc.rhs_termlist:
+            term_strs = [str(f) for f in term.factors]
+            if not any(vv in term_strs for vv in voxelwise_variable_list):
+                keep_terms.append(term)
+        desc.rhs_termlist = keep_terms
+
+        # Build y, X with only non-voxelwise terms
+        y, X = patsy.dmatrices(desc, data_df, return_type="dataframe")
+        
+        for term in X.columns:          # Obliterate all the dumb shit patsy does. 
+            if term not in formula:
+                X.pop(term)
+        
+        left = formula.split("~", 1)[0].strip()
+        for term in voxelwise_variable_list:
+            if term in left:
+                y[term] = pd.DataFrame(data_df[term])
+            else:
+                X[term] = data_df[term]
+        if not add_intercept and "Intercept" in X.columns:  # Intercept handling
+            X = X.drop(columns=["Intercept"])
+        for term in voxelwise_interaction_terms:            # Column name: term with spaces removed; value: 'voxelwise_interaction'
+            X[term.replace(" ", "")] = "voxelwise_interaction"
+
+        return y, X
     
     def define_design_matrix(self, formula, data_df, voxelwise_variable_list=None, coerce_str=False, add_intercept=True, voxelwise_interaction_terms=None):
         """
@@ -46,37 +80,41 @@ class CalvinStatsmodelsPalm(CalvinPalm):
         - X: DataFrame
             Independent variable matrix.
         """
-        left = formula.split('~')[0].strip()
-        right = formula.split('~')[1].strip()
-        vars = patsy.ModelDesc.from_formula(formula)
-        if voxelwise_variable_list is not None:
-            new_rhs = []
-            for term in vars.rhs_termlist:
-                term_strs = [str(factor) for factor in term.factors]
-                if not any(vv in term_strs for vv in voxelwise_variable_list):
-                    new_rhs.append(term)
-            vars.rhs_termlist = new_rhs
-
-        if coerce_str:                                                              #Convert categorical strings to integer codes **before** patsy processes them
-            for col in data_df.columns:                     
-                if col not in voxelwise_variable_list:
-                    data_df[col], _ = pd.factorize(data_df[col])               # factorize categorical variables, but not the voxelwise ones
-                
-        y, X = patsy.dmatrices(vars, data_df, return_type='dataframe')
-        
-        if y.shape[1] == 2:  # Remove second column in binomial case
-            y = y.iloc[:, [0]]
+        try:
+            left = formula.split('~')[0].strip()
+            vars = patsy.ModelDesc.from_formula(formula)
             
-        if add_intercept==False:                                                    # check the intercept
-            X.pop('Intercept')
-        if voxelwise_variable_list is not None:                                     
-            for term in voxelwise_variable_list:
-                if term in left:
-                    y = pd.DataFrame(data_df[term])  # reinsert the voxelwise variables, uninteracted, as a DataFrame
-                    continue
-                X[term] = data_df[term]                                             # reinsert the voxelwise variables, uninteracted
-                X = self._remove_voxelwise_interaction_terms(data_df, X, voxelwise_variable_list)  # check for interactions with the voxelwise variables
-                X = self._reintroduce_voxelwise_interaction_terms(X, voxelwise_interaction_terms)      
+            if voxelwise_variable_list is not None:
+                new_rhs = []
+                for term in vars.rhs_termlist:
+                    term_strs = [str(factor) for factor in term.factors]
+                    if not any(vv in term_strs for vv in voxelwise_variable_list):
+                        new_rhs.append(term)
+                vars.rhs_termlist = new_rhs
+            if coerce_str:                                                              #Convert categorical strings to integer codes **before** patsy processes them
+                for col in data_df.columns:                     
+                    if col not in voxelwise_variable_list:
+                        data_df[col], _ = pd.factorize(data_df[col])               # factorize categorical variables, but not the voxelwise ones
+                    
+            y, X = patsy.dmatrices(vars, data_df, return_type='dataframe')
+            
+            if y.shape[1] == 2:  # Remove second column in binomial case
+                y = y.iloc[:, [0]]
+                
+            if add_intercept==False:                                                    # check the intercept
+                X.pop('Intercept')
+                
+            if voxelwise_variable_list is not None:                                     
+                for term in voxelwise_variable_list:
+                    if term in left:
+                        y = pd.DataFrame(data_df[term])  # reinsert the voxelwise variables, uninteracted, as a DataFrame
+                        continue
+                    X[term] = data_df[term]                                             # reinsert the voxelwise variables, uninteracted
+                    X = self._remove_voxelwise_interaction_terms(data_df, X, voxelwise_variable_list)  # check for interactions with the voxelwise variables
+                    X = self._reintroduce_voxelwise_interaction_terms(X, voxelwise_interaction_terms)      
+        except Exception as e:
+            print(f"Error because patsy is garbage: {e}. using fallback.")
+            y, X = self._dmatrix_fallback(formula, data_df, voxelwise_variable_list, add_intercept, voxelwise_interaction_terms)
         return y, X
     
     def _reintroduce_voxelwise_interaction_terms(self, dmatrix, voxelwise_interaction_terms):
