@@ -2,17 +2,20 @@ import os
 import pandas as pd
 import numpy as np
 from tqdm import tqdm
-import matplotlib.pyplot as plt
+import os, numpy as np, matplotlib.pyplot as plt, seaborn as sns, matplotlib
 from typing import List, Tuple
 from itertools import combinations, product
 from calvin_utils.ccm_utils.resampling_plot import ResampleVisualizer
 from calvin_utils.ccm_utils.permutation_plot import PermutationVisualizer
 from calvin_utils.ccm_utils.correlations import run_pearson, run_spearman
-import seaborn as sns
-sns.set_theme(style="white", context="talk")
+plt.ion()
+
+
+print("backend:", matplotlib.get_backend(), "interactive:", plt.isinteractive())
+
 
 class SpecificityAnalyzer:
-    def __init__(self, X, Y, y_labels, correlation='spearman', method='bootstrap', vectorize=True, out_dir=None):
+    def __init__(self, X, Y, y_labels, correlation='spearman', method='bootstrap', vectorize=True, out_dir=None, absval=True):
         '''
         Args:
             X: Array-like. Can accept DF or np.array. Expects shape (Observations, Variables), where observations=voxels.
@@ -24,18 +27,37 @@ class SpecificityAnalyzer:
         Returns:
         
         '''
-        self.y_labels = y_labels
         self.correlation = correlation
         self.method = method
         self.vectorize = vectorize
         self.out_dir = out_dir
+        self.absval = absval
         self.deltas = None
+        self.cols = X.columns
+        Y, self.y_labels, self.y_cols = self._clean_y(Y, y_labels)
         self.observations_x, self.n_independent_vars, self.x_arr = self._get_arr_info(X)
         self.observations_y, self.n_dependent_vars, self.y_arr = self._get_arr_info(Y)
         self.y_sort_idx, self.labels, self.n_labels, self.unique_labels, self.label_mapping = self._get_label_info()
         self._validate_inputs()
         
     ### Helpers ###
+    def _clean_y(self, df: pd.DataFrame, labels: dict) -> pd.DataFrame:
+        # Keep only columns present in y_labels and numeric
+        trg_cols = [c for c in df.columns if c in labels.keys()]
+        d = df[trg_cols].copy()
+
+        # coerce to numeric and drop non-numeric columns
+        for c in list(d.columns):
+            if d[c].dtype == 'object':
+                print(f"Dropping non-numeric column: {c}")
+                d.pop(c)
+
+        # prune y_labels to columns that survived
+        labels_dict = {c: labels[c] for c in d.columns if c in labels}
+        print(d.columns, labels_dict.keys())
+        return d, labels_dict, list(d.columns)
+
+        
     def _get_arr_info(self, arr) -> Tuple[int, int]:
         if isinstance(arr, pd.DataFrame):
             arr = arr.to_numpy()
@@ -43,14 +65,23 @@ class SpecificityAnalyzer:
             arr = np.array(arr)
         return arr.shape[0], arr.shape[1], arr
     
-    def _get_label_info(self) -> Tuple[np.ndarray, list, int, list]:
-        """Returns an index array that will group columns of self.y_arr by the labels in self.y_labels, preserving the original order within each label."""
-        idx = np.arange(self.n_dependent_vars) # [0, n_cols-1]
-        labels = list(self.y_labels.values())
-        idx_sorted = sorted(idx, key=lambda i: labels[i])
-        mapping = {label: i for i, label in enumerate(dict.fromkeys(labels))}
-        int_labels = [mapping[label] for label in labels]
-        return idx_sorted, labels, len(np.unique(labels)), np.unique(labels), int_labels
+    def _get_label_info(self):
+        # labels aligned to Y columns
+        labels = [self.y_labels[c] for c in self.y_cols]         
+        uniq_order = list(dict.fromkeys(labels))                      # preserves order
+        mapping = {lab: i for i, lab in enumerate(uniq_order)}
+        int_labels = np.array([mapping[lab] for lab in labels], int)  # per-column int label
+
+        # sort index that groups columns by label (preserves intra-label order)
+        idx = np.arange(len(self.y_cols))
+        y_sort_idx = sorted(idx, key=lambda i: int_labels[i])
+
+        return (np.array(y_sort_idx, int),
+                labels,
+                len(uniq_order),
+                np.array(uniq_order, dtype=object),
+                int_labels)
+
     
     def _validate_inputs(self):
         if self.observations_x != self.observations_y:
@@ -89,37 +120,45 @@ class SpecificityAnalyzer:
         label_indices = np.arange(len(self.unique_labels))
         pairs = list(combinations(label_indices, r=2))          # [(a,b), ...]
         tasks = product(range(n_indep), pairs)                   # (iv, (a,b)) generator
-        
+        p = np.zeros((n_indep, n_labels))
         for iv, (a, b) in tasks: # get combinations of pairs of labels. 
-            print(f"----\nIndepVar #{iv}, {self.unique_labels[a]} vs {self.unique_labels[b]}\n----")
+            print(f"----\n{self.cols[iv]}, {self.unique_labels[a]} vs {self.unique_labels[b]}\n----")
             if self.method == 'permutation':
-                delta      = float(arr_obs[iv, a] - arr_obs[iv, b])
-                delta_dist = (arr_resample[iv, a, :] - arr_resample[iv, b, :]).ravel()
+                delta      = float(np.abs(arr_obs[iv, a] - arr_obs[iv, b]))
+                i, j = np.triu_indices(arr_resample.shape[1], k=1)
+                max_delta = np.max(np.abs(arr_resample[iv, i, :] - arr_resample[iv, j, :]), axis=0).ravel()               
                 PermutationVisualizer(
-                    stat_obs=delta, stat_dist=delta_dist, stat='AUC', out_dir=self.out_dir
-                ).draw(f'iv{iv}_deltaAUC={self.unique_labels[a]}-{self.unique_labels[b]}.svg')
+                    stat_obs=delta, stat_dist=max_delta, stat='Delta Correlation', out_dir=self.out_dir, absval=True
+                ).draw(f'iv{iv}_deltaAvgCorr={self.unique_labels[a]}-{self.unique_labels[b]}_maxstatperm.svg', verbose=True)
             elif self.method == 'bootstrap':
                 ResampleVisualizer(
                     arr_resample[iv, a, :].ravel(),
                     arr_resample[iv, b, :].ravel(),
                     self.unique_labels[a], self.unique_labels[b],
-                    stat='AUC', out_dir=self.out_dir
-                ).draw(f'iv{iv}_deltaAUC={self.unique_labels[a]}-{self.unique_labels[b]}.svg')
+                    stat='Average Correlation', out_dir=self.out_dir
+                ).draw(f'iv{iv}_avgCorr={self.unique_labels[a]}-{self.unique_labels[b]}_bootstrap.svg', verbose=True)
 
             else:
                 raise ValueError(f"Method {self.method} not supported. Set method='bootstrap' or 'permutation")
         return
     
     ### Statistical Tools ###
-    def _get_AUC(self, arr) -> np.ndarray:
-        '''
-        Gets AUC of the R values within an UNSORTED array, treating them like a Riemann Sum with dx=1
-        
-        Returns
-            np.ndarray with shape (n_indep, n_unique_labels). A single row has the AUCs for a single independent variable across the unique categories (labels)
-        '''
-        mask = np.array(self.unique_labels)[:, None] == np.array(self.labels)[None, :]      # shape (n_unique_labels, n_dep_var) <- (n_unique_labels, 1) (1, n_dep_var)
-        return arr @ mask.T   # shape (n_indep, n_unique_labels) <- (n_indep, n_dep) @ (n_dep_var, n_unique_labels)
+    def _get_AUC(self, arr: np.ndarray) -> np.ndarray:
+        """
+        Average correlations within each label group using the aligned label vector.
+        arr shape: (n_indep, n_dep)
+        """
+        # build mask with labels aligned to arr columns
+        # self.labels is aligned to self.y_cols; arr columns must be in same order.
+        lab_vec = np.array(self.labels, dtype=object)                 # (n_dep,)
+        uniq = np.array(self.unique_labels, dtype=object)             # (n_labels,)
+        mask = (uniq[:, None] == lab_vec[None, :]).astype(float)      # (n_labels, n_dep)
+
+        counts = mask.sum(axis=1, keepdims=True)                      # (n_labels,1)
+        counts[counts == 0] = 1.0
+        # (n_indep, n_dep) @ (n_dep, n_labels) -> (n_indep, n_labels)
+        return arr @ mask.T / counts.T
+
 
     def _correlate(self, X, Y) -> np.ndarray:
         '''
@@ -138,7 +177,10 @@ class SpecificityAnalyzer:
     def _run_correlation(self, resample=False) -> np.ndarray:
         '''Looped handling correlation function'''
         X, Y = self._resample(resample)
-        return self._correlate(X,Y) # returns shape (Indepvars, Depvars)
+        if self.absval:
+            return np.abs(self._correlate(X,Y))
+        else:
+            return self._correlate(X,Y) # returns shape (Indepvars, Depvars)
         
     def _run_loop(self, n_resamples):
         if n_resamples < 1:
@@ -153,26 +195,27 @@ class SpecificityAnalyzer:
     ### Sorting Utils ###
     def _sort_arr(self, a: np.ndarray) -> np.ndarray:
         a = np.asarray(a, float)
-        # sort by |r| descending (real values preserved)
-        a = a[np.argsort(-np.abs(a))]
-        # radial placement: largest near center, then alternate sides
+        a = a[np.argsort(-np.abs(a))]   # sort by |r| descending (real values preserved)
         out = []
-        for i, v in enumerate(a):
+        for i, v in enumerate(a):   # radial placement: largest near center, then alternate sides
             if i % 2 == 0:
                 out.append(v)
             else:
                 out.insert(0, v)
         return np.array(out)
 
-    
     def _sort_corrs(self, arr: np.ndarray) -> np.ndarray:
-        '''Sorts the correlations to group within labels. Then, sorts within each label to have a radially descending magnitude.'''
-        arr = arr[self.y_sort_idx] # Sorts R to group the R values within labels. 
-        L = np.array(self.labels)[self.y_sort_idx] 
+        """
+        Sort correlations to group by label (aligned via y_sort_idx),
+        then radial sort within each label group.
+        """
+        arr = arr[self.y_sort_idx]                # group by label using aligned index
+        L = np.array(self.labels)[self.y_sort_idx]
         for label in self.unique_labels:
-            subidx = L == label
+            subidx = (L == label)
             arr[subidx] = self._sort_arr(arr[subidx])
         return arr
+
     
     ### Plotting Utils ###
     def _compute_group_meta(self):
@@ -243,16 +286,17 @@ class SpecificityAnalyzer:
         W = np.exp(-0.5 * Z * Z)                             # (n,m)
         y_fit = (W * y_aug[:, None]).sum(0) / (W.sum(0) + 1e-12)
 
+        # mask = (x_fine_global >= L) & (x_fine_global <= R)
+        y_fit[x_fine_global < L] = np.nan
+        y_fit[x_fine_global > R] = np.nan
+        
         # draw line across the full axis; fill only within this block
         ax.plot(
             x_fine_global, y_fit, color=line_color, linewidth=3.0, alpha=0.95, zorder=4,
             path_effects=[pe.Stroke(linewidth=4.0, foreground='white', alpha=0.35), pe.Normal()]
         )
-        mask = (x_fine_global >= L) & (x_fine_global <= R)
-        ax.fill_between(x_fine_global, 0.0, y_fit, where=mask, color=line_color, alpha=fill_alpha, zorder=1)
 
-    def _plot(self, CORR: np.ndarray, scale:float = 0.8):
-        import os, numpy as np, matplotlib.pyplot as plt, seaborn as sns
+    def _plot(self, CORR: np.ndarray, scale:float = 1):
         BLACK, GREY = '#211D1E', '#8E8E8E'
         sns.set_theme(style="white", context="talk")
 
@@ -260,7 +304,7 @@ class SpecificityAnalyzer:
         labels_sorted, group_order, group_sizes, group_edges, group_starts, group_centers = self._compute_group_meta()
         color_map = self._palette(group_order)
 
-        n_indep, n_dep = CORR.shape
+        _, n_dep = CORR.shape
         x_bars = np.arange(n_dep)
         # global fine grid for smooth overlays
         upsample = 120
@@ -272,7 +316,6 @@ class SpecificityAnalyzer:
             # bars (lighter tints)
             bar_colors = [self._lighten(color_map[lab], factor=0.65) for lab in labels_sorted]
             fig, ax = plt.subplots(figsize=(12, 6))
-            print(x_bars, r_vals)
             ax.bar(x_bars, r_vals, width=0.9, color=bar_colors, edgecolor="white", linewidth=1.3, zorder=2)
 
             # per-label KDE overlays (darker line)
@@ -284,6 +327,12 @@ class SpecificityAnalyzer:
                 self._draw_label_kde(ax, start, end, r_vals, line_color, x_fine_global,
                                     bw_scale=scale, fill_alpha=0)
 
+                # average R value for this category
+                avg_r = np.nanmean(r_vals[start:end])
+                ax.text(start + size/2 - 0.5, avg_r, f"{avg_r:.2f}",
+                        ha='center', va='bottom' if avg_r >= 0 else 'top',
+                        fontsize=12, color=BLACK, fontweight='bold')
+
             # separators
             for edge in group_edges[:-1]:
                 ax.axvline(edge - 0.5, ls='--', color=GREY, lw=1.6, zorder=1)
@@ -293,25 +342,25 @@ class SpecificityAnalyzer:
             ax.set_xticklabels(group_order, fontsize=16, color=BLACK)
 
             # cosmetics
-            ax.set_ylabel('Correlation (r)', fontsize=20, color=BLACK)
-            ax.set_title(f'Specificity (per-label KDE overlay) — IV {iv + 1}', fontsize=22, color=BLACK)
+            ax.set_ylabel(f'Correlation ({self.correlation})', fontsize=20, color=BLACK)
+            ax.set_title(f'{self.cols[iv]}', fontsize=22, color=BLACK)
             ax.axhline(0, color=GREY, lw=1.6)
             ax.grid(axis='y', alpha=0.15)
             for s in ax.spines.values():
                 s.set_linewidth(2); s.set_color(BLACK)
             ax.set_xlim(-0.5, n_dep - 0.5)
 
-            ymax = max(1.0, float(np.nanmax(r_vals))); ymin = min(-1.0, float(np.nanmin(r_vals)))
+            ymax = float(np.nanmax(CORR)); ymin = float(np.nanmin(CORR))
             pad = 0.06 * (ymax - ymin if ymax > ymin else 1.0)
-            ax.set_ylim(ymin - pad, ymax + pad)
+            ax.set_ylim(0 if self.absval else ymin - pad, ymax + pad)
 
             sns.despine(ax=ax)
-            plt.tight_layout()
+            fig.tight_layout()
             if self.out_dir:
                 os.makedirs(self.out_dir, exist_ok=True)
                 fig.savefig(os.path.join(self.out_dir, f'specificity_iv{iv + 1}.svg'), format='svg')
-            plt.show(fig)
-
+            plt.show()
+            plt.close(fig)
 
     ### Orchestrator ### 
     def run(self, n_resamples=1000, scale=0.85):
@@ -324,7 +373,6 @@ class SpecificityAnalyzer:
         p     = self._get_p_values(AUC, AUC_p)
         # 4 - For each col of X, plot the R-values from step 1, but coloured/grouped by y_label and sorted in a gaussian fashion within each label group. 
         self._plot(CORR, scale)
-        pass
 
 
 def get_column_labels(df):

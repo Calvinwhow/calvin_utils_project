@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-import random, time, sys, os, argparse, concurrent.futures, multiprocessing, _thread
+import random, time, sys, os, argparse, multiprocessing, csv
 from pathlib import Path
-import threading
+from datetime import datetime
+
 # ---------------------------------------------------------------------
 # constants
 DEFAULT_LIST_LEN  = 12
-DEFAULT_BLOCK_SEC = 30
+DEFAULT_BLOCK_SEC = 5
 WORD_FILE         = Path(__file__).with_name("nouns.txt")   # nouns.txt in same dir
 # ---------------------------------------------------------------------
 
@@ -81,6 +82,39 @@ def get_timed_input(words_list: list[str], sec: int) -> int:
     except ValueError:
         return 0
 
+# ---------- file logging -----------------------------------------------
+def prompt_session_meta(args) -> tuple[str, str, Path, Path]:
+    """Get patient/date/outdir; create file; return (patient, date, outdir, csv_path)."""
+    patient = input("Patient name: ").strip()
+    session_no = int(input("Session Number [1/2/3]: "))
+    date_str = datetime.now().strftime("%Y-%m-%d")
+    outdir = Path(input("Output directory: ").strip() or "./outputs")
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    # simple slug for filename
+    safe_patient = "_".join(patient.split())
+    csv_path = outdir / f"{date_str}_{safe_patient}_ses-{session_no}_delayed_recall.csv"
+
+    # create file + header if new
+    if not csv_path.exists():
+        with csv_path.open("w", newline="") as f:
+            w = csv.writer(f)
+            w.writerow([
+                "trial_number","list_len","recalled_n","block_sec", "words_presented"
+            ])
+    return csv_path
+
+def append_row(csv_path: Path, row: dict):
+    with csv_path.open("a", newline="") as f:
+        w = csv.writer(f)
+        w.writerow([
+            row["trial_number"],
+            row["list_len"],
+            row["recalled_n"],
+            row["block_sec"],
+            " ".join(row["words_presented"]),  # space-delimited for readability
+        ])
+
 # ---------- trial loop -------------------------------------------------
 def run_single_trial(pool: list[str], list_len: int, block_sec: int):
     words = sample_words(pool, list_len)
@@ -88,12 +122,23 @@ def run_single_trial(pool: list[str], list_len: int, block_sec: int):
     arithmetic_distractor(block_sec)
     recalled = get_timed_input(words, block_sec)
     print(f"Patient recalled {recalled}/{list_len}")
+    return recalled, list_len, words
 
 def main():
     args   = parse_args()
     pool   = load_word_column(args.word_file)
+    csv_path = prompt_session_meta(args)
+    print(f"\nLogging to: {csv_path}")
+    trial_no = 1
     while True:
-        run_single_trial(pool, args.length, args.time)
+        recalled, list_len, words = run_single_trial(pool, args.length, args.time)
+        row = {"trial_number": trial_no,
+               "list_len": list_len,
+               "recalled_n": recalled,
+               "block_sec": args.time,
+               "words_presented": words}
+        append_row(csv_path, row)
+        trial_no += 1
         if input("\nAnother list?  <Enter=Yes | q=Quit> ").lower().startswith('q'):
             break
 

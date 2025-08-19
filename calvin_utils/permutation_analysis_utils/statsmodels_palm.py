@@ -20,7 +20,6 @@ class CalvinStatsmodelsPalm(CalvinPalm):
         Reads data using the parent class method and displays the DataFrame.
         """
         data_df = super().read_data()
-        print(data_df)
         return data_df
     
     def _dmatrix_fallback(self, formula, data_df, voxelwise_variable_list=None, add_intercept=True, voxelwise_interaction_terms=None):
@@ -97,9 +96,11 @@ class CalvinStatsmodelsPalm(CalvinPalm):
                         data_df[col], _ = pd.factorize(data_df[col])               # factorize categorical variables, but not the voxelwise ones
                     
             y, X = patsy.dmatrices(vars, data_df, return_type='dataframe')
-            
             if y.shape[1] == 2:  # Remove second column in binomial case
                 y = y.iloc[:, [0]]
+            if y.shape[1] > 2: # handle multi-output situation
+                cols = left.split(' + ')
+                y = data_df[cols]
                 
             if add_intercept==False:                                                    # check the intercept
                 X.pop('Intercept')

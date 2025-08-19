@@ -77,10 +77,10 @@ class DamageScorer:
             damage_df.loc[subject, f'{roi}_cosine'] = self._calculate_cosine_similarity(subject_array, roi_array)
         if 'sum' in metrics:
             damage_df.loc[subject, f'{roi}_sum'] = self._calculate_dot_product(subject_array, roi_array)
-        if 'average_arr1' in metrics:
-            damage_df.loc[subject, f'{roi}_average_subject_in_target'] = self._calculate_normalized_dot_product(subject_array, roi_array, denominator='array_2')
-        if 'average_arr2' in metrics:
-            damage_df.loc[subject, f'{roi}_average_target_in_subject'] = self._calculate_normalized_dot_product(subject_array, roi_array, denominator='array_1')
+        if 'avg_in_target' in metrics:
+            damage_df.loc[subject, f'{roi}_average_subject_in_target'] = self._calculate_normalized_dot_product(subject_array, roi_array, denominator='avg_in_target')
+        if 'avg_in_subject' in metrics:
+            damage_df.loc[subject, f'{roi}_average_target_in_subject'] = self._calculate_normalized_dot_product(subject_array, roi_array, denominator='avg_in_subject')
         if 'num_in_roi' in metrics:
             damage_df.loc[subject, f'{roi}_num_in_roi'] = self._count_voxels_greater_than_threshold(subject_array, mask=roi_array, threshold=2)
 
@@ -107,14 +107,15 @@ class DamageScorer:
         '''Calculate the dot product of two arrays'''
         return np.dot(array1, array2)
 
-    def _calculate_normalized_dot_product(self, array1, array2, denominator='array_1'):
+    def _calculate_normalized_dot_product(self, subj_arr, roi_arr, denominator='array_1'):
         '''Calculate the normalized dot product (average of the dot product)'''
-        dot_product = np.dot(array1, array2)
-        if denominator == 'array_1':
-            non_zero_elements = np.count_nonzero( ~np.isnan(array1) & (array1 > 0))
-           
+        dot_product = np.dot(subj_arr, roi_arr)
+        if denominator == 'avg_in_target':
+            non_zero_elements = np.count_nonzero( ~np.isnan(subj_arr) & (roi_arr > 0))
+        elif denominator == 'avg_in_subject':
+            non_zero_elements = np.count_nonzero( ~np.isnan(roi_arr) & (subj_arr > 0))
         else:
-            non_zero_elements = np.count_nonzero( ~np.isnan(array2) & (array2 > 0))
+            raise ValueError(f"Value {denominator} not supported.")
         if non_zero_elements == 0:
             return 0  # Avoid division by zero
         return dot_product / non_zero_elements
@@ -135,7 +136,7 @@ class DamageScorer:
         except:
             return df
     
-    def calculate_damage_scores(self, metrics=['spatial_correlation', 'cosine', 'sum', 'average_arr1', 'average_arr2', 'num_in_roi']):
+    def calculate_damage_scores(self, metrics=['spatial_correlation', 'cosine', 'sum', 'avg_in_target', 'avg_in_subject', 'num_in_roi']):
         """
         Calculate damage scores for dv_df and roi_df based on specified metrics.
         This function computes damage scores by iterating through regions of interest and subjects,
@@ -147,7 +148,8 @@ class DamageScorer:
                     - 'spatial_correlation': Measures spatial correlation between niftis.
                     - 'cosine': Computes cosine similarity.
                     - 'sum': Calculates the sum of values.
-                    - 'average': Computes the average of values.
+                    - 'avg_in_target': Computes the average of of subject's values within the roi's mask.
+                    - 'avg_in_subject': Computes average of target roi values inside the subject's mask.
                     - 'num_in_roi': Counts the number of suprathreshold voxels inside the mmask.
         Returns:
             pd.DataFrame: A DataFrame containing the calculated damage scores for each subject

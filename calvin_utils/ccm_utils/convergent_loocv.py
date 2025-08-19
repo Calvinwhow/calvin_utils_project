@@ -10,7 +10,7 @@ from calvin_utils.ccm_utils.stat_utils import CorrelationCalculator
 from calvin_utils.ccm_utils.convergent_map import ConvergentMapGenerator
 
 class LOOCVAnalyzer(ConvergentMapGenerator):
-    def __init__(self, corr_map_dict, data_loader, mask_path=None, out_dir=None, weighting='unweighted', method='spearman', similarity='spatial_correl', n_bootstrap=1000, roi_path=None, group_dict={}, datasets_to_flip = [], align_all_maps=False, flip_axes=False):
+    def __init__(self, corr_map_dict, data_loader, mask_path=None, out_dir=None, weighting='unweighted', method='spearman', similarity='spatial_correl', n_bootstrap=1000, roi_path=None, group_dict={}, datasets_to_flip = [], align_all_maps=False, flip_axes=False, ylabel=None):
         """
         Initialize the LOOCVAnalyzer.
 
@@ -49,7 +49,9 @@ class LOOCVAnalyzer(ConvergentMapGenerator):
         self.similarity = similarity
         self.roi_path = roi_path
         self.flip_axes = flip_axes
+        self.ylab = ylabel
         self.correlation_calculator = CorrelationCalculator(method=method, verbose=False, use_jax=False)
+        self.label_dict  = {'cosine': 'Cosine Similarity', 'spatial_correl': 'Spatial Correlation', 'avg_in_subject': 'Average Damage', 'avg_in_target': 'Average Damage'}
     
     ### Helpers ###
     def _cosine_similarity(self, a, b):
@@ -141,8 +143,9 @@ class LOOCVAnalyzer(ConvergentMapGenerator):
 
         # Labels
         plt.title(f"{dataset_name}", fontsize=20)
-        xlab = 'Cosine Similarity' if self.similarity == 'cosine' else 'Spatial Correlation'
-        ylab = 'Outcome'
+        
+        xlab = self.label_dict[self.similarity] if self.similarity in self.label_dict.keys() else 'Damage'
+        ylab = 'Outcome' if self.ylab is None else self.ylab
         if self.flip_axes:
             ylab = xlab
             xlab = 'Outcome'

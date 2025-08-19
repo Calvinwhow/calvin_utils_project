@@ -91,16 +91,19 @@ class VoxelwiseRegression:
     - Input data must be preprocessed and formatted as specified in the JSON configuration file.
     - NIfTI output requires a valid mask file for unmasking vectorized results.
     """
-    def __init__(self, json_path, mask_path=None, out_dir=None, regression_type='linear'):
+    def __init__(self, json_path, mask_path=None, out_dir=None, regression_type='linear', n_permutations=0):
         self.json_path = json_path
         self.mask_path = mask_path
         self.out_dir = out_dir
         self.regression_type = regression_type
+        self.n_permutations = n_permutations
         self.data_loader = DataLoader(self.json_path)
         self.design_tensor, self.outcome_tensor, self.contrast_matrix, self.exchangeability_blocks, self.weight_vector = self.load_data()
+        print(self.outcome_tensor.shape)
         self.n_obs, self.n_preds, self.dim3_X, self.dim3_Y, self.n_contrasts, self.n_voxels, self.n_outputs = self.set_variables()
         self._validate_regression_type()
-        
+        self.XTX_inv = np.zeros((self.n_preds, self.n_preds, self.n_voxels))
+
     #### Setter/Getter methods ####
     def load_data(self):
         with open(self.json_path, 'r') as f:
@@ -126,6 +129,16 @@ class VoxelwiseRegression:
             print(f"Outcome is not all binary. You should ensure regression_type='linear'. Detected regression_type: {self.regression_type}")
 
     ### REGRESSION HELPERS ###
+    def _check_broadcastable(self, permutation):
+        '''Can only broadcast if in a permutation, XTX_inv is filled, and Y is not voxelwise'''
+        if not permutation:
+            return False
+        if np.all(self.XTX_inv == 0):
+            return False
+        if self.outcome_tensor.shape[2] > 1:
+            return False
+        return True
+    
     def _get_targets(self, permutation):
         """
         Returns the regressor (design tensor) and regressand (outcome data), 
@@ -154,12 +167,16 @@ class VoxelwiseRegression:
         Ensure shape of X, Y, and W matrices. 
         If a regression_idx is provided, it selects the corresponding output channel. This enables multi-output regression.
         """
-        if regressor.shape[2] == self.n_voxels:          # for voxel-wise design with potential multiple outputs
+        if voxel_idx=="whole_brain":                             # for whole-brain one-shot regression
+            X = regressor[:, :, :]
+        elif regressor.shape[2] == self.n_voxels:          # for voxel-wise design with potential multiple outputs
             X = regressor[:, :, voxel_idx]
         else:                                            # for broadcast design
             X = regressor[:, :, 0]                       
 
-        if regressand.shape[2] == self.n_voxels:         # for voxel-wise outcome with potential multiple outputs
+        if voxel_idx=="whole_brain":                             # for whole-brain one-shot regression
+            Y = regressand[:, regression_idx, :]
+        elif regressand.shape[2] == self.n_voxels:         # for voxel-wise outcome with potential multiple outputs
             Y = regressand[:, regression_idx, voxel_idx]
         else:                                            # for multi-output voxel-wise outcome
             Y = regressand[:, regression_idx, 0]
@@ -262,14 +279,23 @@ class VoxelwiseRegression:
     
     def get_r2(self, Y, Y_HAT, W, e=1e-6):
         """
-        Calculate R-squared value from 1 - SS_Residuals/SS_TotalObservations
-        Y is the observed data
-        Y_HAT is the predicted data
+        Weighted R^2: 1 - SSE_w / TSS_w
+        Y      : (o,)
+        Y_HAT  : (o,) or (o,vox)
+        W      : (o,)
+        Return : scalar if Y_HAT is (o,), else (1,vox)
         """
-        Y_mean = np.sum(W * Y)
-        SS_residual = np.sum((Y - Y_HAT)**2)
-        SS_total = np.sum(W * (Y - Y_mean)**2)
-        return 1 - (SS_residual / (SS_total+e))
+        wsum = W.sum()
+        ybar_w = (W * Y).sum() / wsum   # scalar weighted mean
+        
+        if Y_HAT.ndim == 1: # (o,)
+            sse = np.sum(W * (Y - Y_HAT) ** 2)               # scalar
+            tss = np.sum(W * (Y - ybar_w) ** 2)              # scalar
+            return 1 - (sse / (tss + e))                     # scalar
+        elif Y_HAT.ndim == 2: # (o, v)
+            sse = np.sum(W[:, None] * (Y[:, None] - Y_HAT) ** 2, axis=0, keepdims=True)              # (1, v)
+            tss = np.sum(W * (Y - ybar_w) ** 2)              # scalar
+            return 1 - (sse / (tss + e))                     # (1, v)
     
     def get_pseudo_r2(self, Y, W, P, eps=1e-9):
         '''
@@ -287,18 +313,22 @@ class VoxelwiseRegression:
     def apply_contrasts(self, XtX_inv, BETA, MSE, e=1e-6):
         """
         t = (C @ BETA) / sqrt(diag(C @ XtX_inv @ C.T) * MSE)
-
-        'C' is (c, p)
-        'BETA' is (p,) or (p, 1)
-        'XtX_inv' is (p, p)
-        'MSE' is scalar (residual variance)
+        
+        C : (n_contrasts, n_preds) design matrix
+        BETA : (n_preds, ) or (n_preds, voxels)
+        XtX_inv : (n_preds, n_preds) or (n_preds, n_preds, n_voxels)
+        MSE : (1,) or (1, n_voxels)
         """
         C = self.contrast_matrix
-        NUM = C @ BETA
-        var_diag = np.diag(C @ XtX_inv @ C.T)  
-        DEN = np.sqrt(var_diag * MSE)      
+        if XtX_inv.ndim == 2: # conventional 2d matrix
+            NUM = C @ BETA                              # (n_contrasts, ) <- (n_contrasts, n_preds) @ (n_preds, )
+            var_diag = np.diag(C @ XtX_inv @ C.T)       # (n_contrasts,n_contrasts) <- (n_contrasts, n_preds) @ (n_preds, n_preds) @ (n_preds, n_contrasts)
+            DEN = np.sqrt(var_diag * MSE)      
+        else:                 # tensor multiplcation
+            NUM = np.einsum("cp,pv->cv", C, BETA)        # (n_contrasts, n_voxels) <- (n_contrasts, n_preds) @ (n_preds, n_voxels)
+            DEN = np.einsum("cp,pqv,cq->cv", C, XtX_inv, C, optimize=True)
         return NUM / (DEN+e)
-
+    
     def _run_logistic(self, X, Y, W, vectorize=True):
         """
         Binomial logistic regression via IRLS (Y in {0,1}).
@@ -321,6 +351,27 @@ class VoxelwiseRegression:
                 B = None; T = None; PR2 = None
         return B, T, PR2
 
+    def _run_precomputed_linear(self, X, Y, W, XtX_inv):
+        """
+        Runs a precomputed linear regression using known XTX and Y to speed up permutations. 
+        X : (n_obs, n_preds, n_voxels)
+        Y : (n_obs, )
+        W : (n_obs, )
+        XtX_inv : (preds, preds, voxels) 
+        """
+        wsqrt = np.sqrt(W)                                          # (n_obs,)
+        Xw = X * wsqrt[:, None, None]                               # (n_obs, n_preds, n_voxels) <- (n_obs, n_preds, n_voxels) * (n_obs, 1, 1)
+        Yw = Y.flatten() * wsqrt.flatten()                          # (n_obs, )           <- (n_obs, ) * (n_obs, )
+        XtY = np.einsum("opv,o->pv", Xw, Yw)                        # (n_voxels, n_preds) <- (n_obs, n_preds n_voxels) @ (n_obs, )
+        BETA = np.einsum("ppv,pv->pv", XtX_inv, XtY)                # (n_preds, n_voxels) <- (n_preds, n_preds, n_voxels) einsum (n_voxels, n_preds)
+        Y_HAT = np.einsum("opv,pv->ov", X, BETA)                    # (obs, n_voxels) <- (n_obs, n_preds, n_voxels) einsum(n_preds, n_voxels)
+        RES = Y - Y_HAT                                             # (n_obs, n_voxls) <- (n_obs, n_voxls) - (n_obs, n_voxls)
+        dof = self.n_obs - self.n_preds                             # (1,)
+        MSE = np.sum(W[:, None] * RES**2, axis=0) / dof             # (1, n_voxels) <- summed (n_obs, )^2
+        T = self.apply_contrasts(XtX_inv, BETA, MSE)                # (n_contrasts, n_voxels) <- (n_cov, n_voxels) / (n_cov, n_voxels)
+        R2 = self.get_r2(Y.flatten(), Y_HAT, W.flatten())           # (1, n_voxels)
+        return BETA, T, R2
+    
     def _run_linear(self, X, Y, W):
         """
         Runs a standard linear regression. Gets Betas and T values.
@@ -333,37 +384,48 @@ class VoxelwiseRegression:
         """
         wsqrt = np.sqrt(W)                                              # (n_obs,) <-- rooting w array enables its multiple multiplications to remain equivalet to X.T @ W @ X
         Xw = X * wsqrt[:, None]                                         # scale each row
-        Yw = Y * wsqrt                                                   # scale each row
-        XtX_inv = np.linalg.pinv(Xw.T @ Xw)                             # (preds × preds)
-        BETA = XtX_inv @ Xw.T @ Yw
+        Yw = Y * wsqrt                                                  # scale each row
+        XtX_inv = np.linalg.pinv(Xw.T @ Xw)                             # (preds, preds)
+        BETA = XtX_inv @ Xw.T @ Yw                                      # (n_preds,) <- (n_preds,n_obs) @ (n_obs,)
         Y_HAT  = X @ BETA                                               # (obs,) <- (obs, preds) @ (preds,)
-        residuals = Y - Y_HAT                                           # (n_sub, n_voxels) <- (n_sub, n_voxels) - (n_sub, n_voxels)
-        dof = self.n_obs - self.n_preds                                 # scalar  <- (n_sub, ) - (n_cov, )
-        mse = np.sum(W * residuals**2, axis=0) / dof                    # (n_voxels,) <- summed (n_sub, n_voxels) along n_sub
-        T = self.apply_contrasts(XtX_inv, BETA, mse)                    # (n_cov, n_voxels) <- (n_cov, n_voxels) / (n_cov, n_voxels)
-        R2 = self.get_r2(Y, Y_HAT, W)                                   # (n_voxels,) <- (n_sub, n_voxels) - (n_sub, n_voxels)
-        return BETA, T, R2                                              # beta is (predictors,), while T and P are (contrasts,)
+        residuals = Y - Y_HAT                                           # (n_obs, ) <- (n_obs, ) - (n_obs,)
+        dof = self.n_obs - self.n_preds                                 # (1,)
+        mse = np.sum(W * residuals**2, axis=0) / dof                    # (1,) <- summed (n_obs, )^2
+        T = self.apply_contrasts(XtX_inv, BETA, mse)                    # (n_contrasts,)
+        R2 = self.get_r2(Y, Y_HAT, W)                                   # (1,)
+        return BETA, T, R2, XtX_inv                                     # beta is (predictors,), while T and P are (contrasts,)
     
-    def _run_regression(self, X, Y, W):
-        if self.regression_type=='linear':
-            return self._run_linear(X,Y,W)
+    def _run_regression(self, X, Y, W, idx):
+        if (self.regression_type=='linear') and (idx != "whole_brain"):
+            B, T, R2, self.XTX_inv[:, :, idx] = self._run_linear(X,Y,W)
+        elif (self.regression_type=='linear') and (idx == "whole_brain"):
+            B, T, R2 = self._run_precomputed_linear(X,Y,W, self.XTX_inv)
         elif self.regression_type=='logistic':
-            return self._run_logistic(X, Y, W)
+            B, T, R2, self.XTX_inv[:, :, idx] = self._run_logistic(X, Y, W)
         else:
             raise ValueError(f"Regression type {self.regression_type} not implemented. Please set regression_type='linear' or 'logistic'.")
+        return B, T, R2
     
-    def voxelwise_regression(self, permutation=False, regression_idx=0):
-        '''Relies on hat matrix (X'@(X'X)^-1@X')@Y to calculate beta, t-values, and p-values'''
+    def _looped_vs_broadcast_regression(self, regressor, regressand, weights, regression_idx, permutation):
+        """Attemps to do a whole-brain broadcasting if possible. Otherwise defaults to standard looped regression."""
         BETA = np.zeros((self.n_preds, self.n_voxels))
         T = np.zeros((self.n_contrasts, self.n_voxels))
-        R2 = np.zeros((1, self.n_voxels))        
-        regressor, regressand, weights = self._get_targets(permutation)
-        for idx in (range(self.n_voxels) if permutation else tqdm(range(self.n_voxels), desc='Running voxelwise regressions')):
-            X, Y, W = self._prep_targets(regressor, regressand, weights, idx, regression_idx)
-            if np.any(np.isnan(X)) or np.any(np.isnan(Y)) or np.any(np.isnan(W)):
-                print(f"NANS DETECTED: X: {np.any(np.isnan(X))}, Y: {np.any(np.isnan(Y))}, W: {np.any(np.isnan(W))}")
-            BETA[:,idx], T[:,idx], R2[:,idx] = self._run_regression(X, Y, W)
+        R2 = np.zeros((1, self.n_voxels))  
+        broadcastable = self._check_broadcastable(permutation)
+        
+        if not broadcastable:
+            for idx in (range(self.n_voxels) if permutation else tqdm(range(self.n_voxels), desc='Running voxelwise regressions')):
+                X, Y, W = self._prep_targets(regressor, regressand, weights, idx, regression_idx)
+                BETA[:,idx], T[:,idx], R2[:,idx] = self._run_regression(X, Y, W, idx)
+        else:
+            X, Y, W = self._prep_targets(regressor, regressand, weights, "whole_brain", regression_idx)
+            BETA, T, R2 = self._run_regression(X, Y, W, "whole_brain")
         return BETA, T, R2
+
+    def voxelwise_regression(self, permutation=False, regression_idx=0):
+        '''Relies on hat matrix (X'@(X'X)^-1@X')@Y to calculate beta, t-values, and p-values'''      
+        regressor, regressand, weights = self._get_targets(permutation)    
+        return self._looped_vs_broadcast_regression(regressor, regressand, weights, regression_idx, permutation)
     
     ### P-VALUE METHODS ###
     def _get_max_stat(self, arr, pseudo_var_smooth=True, t=99.9):
@@ -486,7 +548,7 @@ class VoxelwiseRegression:
             self.B_multi, self.T_multi, self.R2_multi = B_multi, T_multi, R2_multi
         return B_multi, T_multi, R2_multi
 
-    def run_all_outputs(self, n_permutations=0):
+    def run_all_outputs(self):
         """
         Orchestrates full multi-output regression.
         For each output channel in outcome_tensor:
@@ -503,10 +565,10 @@ class VoxelwiseRegression:
 
             # Run one regression for this output
             self.BETA, self.T, self.R2 = self.voxelwise_regression(regression_idx=j)
-            self.run_permutation(n_permutations)
+            self.run_permutation(self.n_permutations)
             self._save_nifti_maps()
 
-    def run(self, n_permutations=0):
+    def run(self):
         """
         Executes the voxelwise regression analysis and optional permutation testing.
         This method performs the following steps:
@@ -519,7 +581,127 @@ class VoxelwiseRegression:
             n_permutations (int, optional): Number of permutations to run for permutation
                 testing. Defaults to 0 (no permutation testing).
         """
-        
         self.BETA, self.T, self.R2 = self.voxelwise_regression()
-        self.run_permutation(n_permutations)
+        self.run_permutation(self.n_permutations)
         self._save_nifti_maps()
+
+# -----------------------
+# batching / assembly
+# -----------------------
+def voxel_batches(n_vox, batch_size):
+    for s in range(0, n_vox, batch_size):
+        e = min(s + batch_size, n_vox)
+        yield s, e
+
+def build_X_batch(X_shared, voxel_cols, s, e):
+    """
+    Build per-voxel design for a slice [s:e].
+
+    X_shared : (o, p0)         columns shared by all voxels
+    voxel_cols : list of K arrays, each (o, V)  (per-voxel regressors)
+                 pass [] if none
+    returns Xb : (o, p0+K, vb)
+    """
+    o, p0 = X_shared.shape
+    vb = e - s
+    # broadcast shared X to 3D without tiling data in math ops; here we form a small 3D view
+    Xb = np.broadcast_to(X_shared[:, :, None], (o, p0, vb)).copy()
+    if voxel_cols:
+        adds = [vc[:, s:e][..., None].transpose(0, 2, 1) for vc in voxel_cols]  # (o,1,vb) each
+        Xb = np.concatenate([Xb] + adds, axis=1)  # (o, p0+K, vb)
+    return Xb
+
+# -----------------------
+# core linear solver
+# -----------------------
+def run_linear_batched(X, Y, W, C, ridge=1e-10, eps=1e-9):
+    """
+    Weighted linear regression, vectorized across voxels.
+
+    X : (o,p) shared   OR (o,p,v) voxelwise for this slice
+    Y : (o,v)
+    W : (o,)   (broadcasted)
+    C : (c,p)
+
+    Returns:
+      BETA : (p,v)
+      T    : (c,v)     Wald t using per-voxel XtX_inv and MSE
+      R2   : (v,)
+    """
+    o = X.shape[0]
+    if X.ndim == 2:
+        # --- fast shared-X path ---
+        o, p = X.shape
+        v = Y.shape[1]
+
+        wsqrt = np.sqrt(W)                     # (o,)
+        Xw = X * wsqrt[:, None]                # (o,p)
+        WY = W[:, None] * Y                    # (o,v)
+
+        XtX = Xw.T @ Xw                        # (p,p)
+        XtX += ridge * np.eye(p)
+        XtX_inv = np.linalg.pinv(XtX)          # (p,p)
+
+        XwT_Yw = Xw.T @ WY                     # (p,v)
+        BETA = XtX_inv @ XwT_Yw                # (p,v)
+
+        Y_hat = X @ BETA                        # (o,v)
+        resid = Y - Y_hat                       # (o,v)
+        dof = max(o - p, 1)
+        mse = (W[:, None] * resid**2).sum(axis=0) / dof   # (v,)
+
+        # contrasts
+        NUM = C @ BETA                          # (c,v)
+        G = C @ XtX_inv @ C.T                   # (c,c)
+        var_c = np.diag(G)                      # (c,)
+        DEN = np.sqrt(var_c[:, None] * mse[None, :] + eps)
+        T = NUM / DEN
+
+        # weighted R^2
+        ybar = (W[:, None] * Y).sum(axis=0) / W.sum()
+        sst  = (W[:, None] * (Y - ybar[None, :])**2).sum(axis=0)
+        sse  = (W[:, None] * resid**2).sum(axis=0)
+        R2   = 1.0 - sse / (sst + eps)
+        return BETA, T, R2
+
+    # --- voxelwise-X path (o,p,v) ---
+    o, p, v = X.shape
+
+    wsqrt = np.sqrt(W)[:, None, None]          # (o,1,1)  pure broadcasting
+    Xw = X * wsqrt                              # (o,p,v)
+    Yw = Y * np.sqrt(W)[:, None]                # (o,v)
+
+    # XtX per voxel
+    # (p,p,v) <= sum over obs: Xw[o,p,v] * Xw[o,q,v]
+    XtX = np.einsum('opv,oqv->pqv', Xw, Xw)     # (p,p,v)
+    XtX += ridge * np.eye(p)[:, :, None]
+
+    # RHS per voxel
+    XwT_Yw = np.einsum('opv,ov->pv', Xw, Yw)    # (p,v)
+
+    # invert batched
+    XtX_inv = np.linalg.pinv(XtX.transpose(2,0,1)).transpose(1,2,0)  # (p,p,v)
+
+    # betas, fits, residuals
+    BETA  = np.einsum('pqv,pv->qv', XtX_inv, XwT_Yw)   # (p,v)
+    Y_hat = np.einsum('opv,pv->ov', X, BETA)           # (o,v)
+    resid = Y - Y_hat                                  # (o,v)
+
+    dof = np.maximum(o - p, 1)
+    mse = (W[:, None] * resid**2).sum(axis=0) / dof    # (v,)
+
+    # contrasts (per-voxel variance from XtX_inv)
+    NUM   = np.einsum('cp,pv->cv', C, BETA)            # (c,v)
+    CXinv = np.einsum('cp,pqv->cqv', C, XtX_inv)       # (c,p,v)
+    G     = np.einsum('cqv,dq->cdv', CXinv, C)         # (c,c,v)
+    var_c = np.einsum('ccv->cv', G)                    # diag for each v
+    DEN   = np.sqrt(var_c * mse[None, :] + eps)
+    T     = NUM / DEN
+
+    # weighted R^2
+    ybar = (W[:, None] * Y).sum(axis=0) / W.sum()
+    sst  = (W[:, None] * (Y - ybar[None, :])**2).sum(axis=0)
+    sse  = (W[:, None] * resid**2).sum(axis=0)
+    R2   = 1.0 - sse / (sst + eps)
+
+    return BETA, T, R2

@@ -12,6 +12,7 @@ from nilearn import image
 from calvin_utils.ccm_utils.bounding_box import NiftiBoundingBox
 from calvin_utils.nifti_utils.generate_nifti import view_and_save_nifti
 from pathlib import Path
+from tqdm import tqdm
 
 class GiiNiiFileImport:
     """
@@ -73,10 +74,11 @@ class GiiNiiFileImport:
     making it suitable for various data analysis tasks.
 
     """
-    def __init__(self, import_path, subject_pattern='', process_special_values=True, file_column: str=None, file_pattern: str=None):
+    def __init__(self, import_path, subject_pattern='', process_special_values=True, file_column: str=None, file_pattern: str=None, transpose=False):
         self.import_path = import_path
         self.file_pattern = file_pattern
         self.file_column = file_column
+        self.transpose = transpose
         self.subject_pattern = re.compile(subject_pattern) if subject_pattern is not None else None
         self.process_special_values = process_special_values
         self.matrix_df = pd.DataFrame({})
@@ -213,28 +215,32 @@ class GiiNiiFileImport:
     
     def import_matrices(self, file_paths):
         '''Given a list of file paths, import the data and return a dataframe with the imported files, flattened such that each column is a file.'''
-        for file_path in file_paths:
-            # Load and Check if File Path Exists
+        for file_path in tqdm(file_paths, desc='Importing niftis'):
+            self.matrix_df
             path = self.identify_file_type(file_path)
             if path == 'nii':
                 data = self.import_nifti_to_numpy_array(file_path)
-                self.matrix_df[file_path] = data 
             elif path == 'gii':
                 data = self.import_gifti_to_numpy_array(file_path)
-                self.matrix_df[file_path] = data 
             elif path == 'npy':
-                df = self.import_npy_to_numpy_array(file_path)
-                self.matrix_df = df #override the matrix_df with the new one
+                data = self.import_npy_to_numpy_array(file_path)
+                
             elif path == 'unrecognized':    
                 continue # Skip unrecognized files
             else:
                 raise RuntimeError(f"Failed to import file: {file_path}. Error: path type {path} is not yet implemented")
 
+            if path == 'npy':                   # The data is a whole dataframe in the numpy version, by virtue of standard NPY packaging with Calvin Howard's code.
+                self.matrix_df = data
+            else:                  # Assign to the matrix in (voxels, observations) form for when voxels are observations. 
+                self.matrix_df[file_path] = data
+
+
         if len(self.affines) > 1:
             print("Warning: Multiple affines detected. Aligning to common space. Mask is available as self.bbox_mask and 4d data as self.bbox_4d.")
             self.matrix_df = pd.DataFrame({})               # Reset the matrix_df to empty
             self.align_imported_matrices(file_paths)
-            for i, file_path in enumerate(file_paths):
+            for i, file_path in tqdm(enumerate(file_paths), desc='Aligning misaligned files'):
                 data = self.bbox_4d[:, :, :, i]
                 self.matrix_df[file_path] = data.flatten()
                 
@@ -381,9 +387,15 @@ class GiiNiiFileImport:
             name_mapping[name] = new_name
         return df.rename(columns=name_mapping)
     
+    def return_function(self):
+        if not self.transpose:
+            return self.matrix_df
+        return self.matrix_df.transpose(copy=False)
+    
     def run(self):
         self.import_data_based_on_type()
-        return self.matrix_df.T
+        df = self.return_function()
+        return df
 
 class ImportDatasetsToDict(GiiNiiFileImport):
     def __init__(self, df, dataset_col, nifti_col, indep_var_col, covariate_cols):
