@@ -99,10 +99,10 @@ class VoxelwiseRegression:
         self.n_permutations = n_permutations
         self.data_loader = DataLoader(self.json_path)
         self.design_tensor, self.outcome_tensor, self.contrast_matrix, self.exchangeability_blocks, self.weight_vector = self.load_data()
-        print(self.outcome_tensor.shape)
         self.n_obs, self.n_preds, self.dim3_X, self.dim3_Y, self.n_contrasts, self.n_voxels, self.n_outputs = self.set_variables()
         self._validate_regression_type()
         self.XTX_inv = np.zeros((self.n_preds, self.n_preds, self.n_voxels))
+        self.X_inv = None
 
     #### Setter/Getter methods ####
     def load_data(self):
@@ -137,6 +137,8 @@ class VoxelwiseRegression:
             return False
         if self.outcome_tensor.shape[2] > 1:
             return False
+        if self.regression_type=='naive_bayes':
+            return True
         return True
     
     def _get_targets(self, permutation):
@@ -182,8 +184,44 @@ class VoxelwiseRegression:
             Y = regressand[:, regression_idx, 0]
         return X, Y, weights
     
-    #### Regression Methods ####
-    def stable_logit(X, y, sample_weights=None, add_intercept=False, eps=1e-9):
+    def _prep_naive_bayes(self, X):
+        """Precompute per-voxel pseudoinverse and (X^T X)^{-1}."""
+        n, p, v = X.shape
+        self.X_inv   = np.empty((p, n, v), float)      # pinv per voxel (p,n,v)
+        self.XTX_inv = np.empty((p, p, v), float)      # (X^T X)^{-1} per voxel
+        for vox in range(v):
+            self.X_inv[:, :, vox] = np.linalg.pinv(X[:, :, vox])                    # (p,n)
+            XtX = X[:, :, vox].T @ X[:, :, vox]                                     # (p,p)
+            self.XTX_inv[:, :, vox] = np.linalg.pinv(XtX)
+        return self.X_inv, self.XTX_inv
+    
+    ### Statistical Helpers ###
+    def _gaussian_kernel(self, X, Y, k, h=2.0, block=512, eps=1e-300):
+        """
+        Simple healper for Gaussian kernel for feature k. 
+        
+        X : (n_obs, n_features, n_voxels)
+        Y : (n_obs,)
+        k : the index of the current parameter
+        h : (1,)
+        returns F : (n_obs, n_vox)
+        """
+        idx = np.flatnonzero(Y)
+        if idx.size == 0:
+            return np.full((self.n_obs, self.n_voxels), eps, float)
+        term1 = 1 / (np.sum(Y) * h * np.sqrt(2*np.pi))
+        inv2h2 = 1.0 / (2.0 * h * h)
+        Xc = X[idx, k, :]                                    # (N_obs_, v) <- drops axis 1 corresponding to k. 
+        
+        F = np.empty((self.n_obs, self.n_voxels), float)
+        for obs_start in range(0, self.n_obs, block):
+            obs_stop = min(obs_start + block, self.n_obs)              # prevent over-slicing
+            D2 = (X[obs_start:obs_stop, k, :][:, None, :] - Xc[None, :, :])**2
+            term2 = np.exp(-inv2h2 * D2).sum(axis=1)                                # (b-a, v) <- sum over axis 1, the feature axis, collapsing these into observation values at each voxel
+            F[obs_start:obs_stop, :] = term1 * np.maximum(term2, eps)
+        return F
+        
+    def _stable_logit(X, y, sample_weights=None, add_intercept=False, eps=1e-9):
         # sanitize
         X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
         y = np.nan_to_num(y, nan=0.0, posinf=0.0, neginf=0.0)
@@ -277,6 +315,7 @@ class VoxelwiseRegression:
         _, XtX = self._irls(X, Y, B, P, W)
         return B, np.linalg.pinv(XtX)
     
+    #### Regression Methods ####
     def get_r2(self, Y, Y_HAT, W, e=1e-6):
         """
         Weighted R^2: 1 - SSE_w / TSS_w
@@ -297,18 +336,29 @@ class VoxelwiseRegression:
             tss = np.sum(W * (Y - ybar_w) ** 2)              # scalar
             return 1 - (sse / (tss + e))                     # (1, v)
     
-    def get_pseudo_r2(self, Y, W, P, eps=1e-9):
+    def _get_pseudo_r2(self, Y, W, P, eps=1e-9):
         '''
         Gets MacFadden Pseudo R^2 = 1 - (LL_o / LL)
-        ll_null = MLE(p) = avg(Y)
+        ll_null = (Y * np.log(P_null) + (1 - Y) * np.log(1 - P_null))
         log-likelihood(β) = Σ_i  wᵢ[yᵢlog(pᵢ) + (1 - yᵢ) log(1 - pᵢ)]
         These are challenging to interpret, but represent an acceptable measure of overall fit.
+        
+        Get pseudo-MSE from McFadden R2
+        MSE = ll_null / self.n_obs
+        R2 = 1 - ll_o/ll
+        where
+        ll_o = N * MSE
+        Thus 
+        ll_o / N = MSE
+        and
+        ll_o = np.sum(W * (Y * np.log(P_o) + (1 - Y) * np.log(1 - P_o)))
         '''
         P_null = np.clip(np.average(Y, weights=W), eps, 1 - eps) # clipped for numerical safety
         ll_null = np.sum(W * (Y * np.log(P_null) + (1 - Y) * np.log(1 - P_null)))
         ll_full = np.sum(W * (Y * np.log(P)      + (1 - Y) * np.log(1 - P     )))
+        MSE = ll_null / self.n_obs
         R2 = np.array([1.0 - ll_full / ll_null])
-        return R2
+        return R2, MSE
     
     def apply_contrasts(self, XtX_inv, BETA, MSE, e=1e-6):
         """
@@ -328,6 +378,31 @@ class VoxelwiseRegression:
             NUM = np.einsum("cp,pv->cv", C, BETA)        # (n_contrasts, n_voxels) <- (n_contrasts, n_preds) @ (n_preds, n_voxels)
             DEN = np.einsum("cp,pqv,cq->cv", C, XtX_inv, C, optimize=True)
         return NUM / (DEN+e)
+
+    def _run_naive_bayes(self, X, Y, W, X_inv, XTX_inv, eps=1e-12):
+        """
+        Binomial case via closed form. 
+        log-likelihood(yᵢ|X) = log(pᵢfᵢ(X)/p_jf_j(X)) = b + wTX]
+        
+        X : (n_obs, n_preds, n_voxels)
+        Y : (n_obs, )
+        W : (n_obs, )
+        X_inv : (n_preds, n_obs, n_voxels)
+        XTX_inv : (n_obs, n_preds, n_voxels)
+        returns: WE (p,vox), T (n_contrasts,vox), R2 (McFadden) as (1,vox)
+        """
+        j, J = (Y == 1), (Y == 0)
+        p1 = j.sum() / self.n_obs; p0 = 1.0 - p1
+        LL = 0
+        for k in range(self.n_preds):
+            num = self._gaussian_kernel(X,j,k)
+            den = self._gaussian_kernel(X,J,k)
+            LL += np.log(p1*num/(p0*den+eps))                              # (n_obs, n_vox) <- (n_obs, n_vox) / (n_obs / n_vox)
+        P  = 1.0 / (1.0 + np.exp(-LL))
+        W = np.einsum("pov,ov->pv", X_inv, LL)                 # (n_obs, n_vox) <- (n_obs, n_preds, n_voxels) @ (n_obs, n_voxels)
+        PR2, MSE = self._get_pseudo_r2(Y, W, P)
+        T = self.apply_contrasts(XTX_inv, W, MSE=MSE)           # (n_contrast, n_voxels) <- 
+        return W, T, PR2
     
     def _run_logistic(self, X, Y, W, vectorize=True):
         """
@@ -339,10 +414,9 @@ class VoxelwiseRegression:
                 B, XTX_inv = self._fit_logistic(X, Y, W)
                 P = self._clipped_sigmoid(X @ B) # Gets probability, but clips for safety
             else:
-                B, XTX_inv, P = self.stable_logit(X, Y, W, True)
-                    
-            T = self.apply_contrasts(XTX_inv, B, MSE=1.0) # set MSE=1 to get a Wald Statistic.
-            PR2 = self.get_pseudo_r2(Y, W, P)
+                B, XTX_inv, P = self._stable_logit(X, Y, W, True)
+            PR2, MSE = self.get_pseudo_r2(Y, W, P)
+            T = self.apply_contrasts(XTX_inv, B, MSE=MSE)
         except Exception as e:
             if 'SVD did not converge' in str(e):        # SVD to invert XTX fails if zero variance (empty col), rank deficiency (permutation risk), perfect separation of Y (permutation risk), or numerical overflow (prophylaxed)
                 B = 0; T = 0; PR2 = 0
@@ -401,7 +475,11 @@ class VoxelwiseRegression:
         elif (self.regression_type=='linear') and (idx == "whole_brain"):
             B, T, R2 = self._run_precomputed_linear(X,Y,W, self.XTX_inv)
         elif self.regression_type=='logistic':
-            B, T, R2, self.XTX_inv[:, :, idx] = self._run_logistic(X, Y, W)
+            B, T, R2 = self._run_logistic(X, Y, W)
+        elif self.regression_type=='naive_bayes':
+            if self.X_inv is None:          # If this is the first time calling this, must precomputed X inverse and XTX inverse. 
+                self._prep_naive_bayes(X)
+            B, T, R2 = self._run_naive_bayes(X,Y,W, self.X_inv, self.XTX_inv)
         else:
             raise ValueError(f"Regression type {self.regression_type} not implemented. Please set regression_type='linear' or 'logistic'.")
         return B, T, R2
