@@ -131,14 +131,14 @@ class VoxelwiseRegression:
     ### REGRESSION HELPERS ###
     def _check_broadcastable(self, permutation):
         '''Can only broadcast if in a permutation, XTX_inv is filled, and Y is not voxelwise'''
+        if self.regression_type=='naive_bayes':
+            return True
         if not permutation:
             return False
         if np.all(self.XTX_inv == 0):
             return False
         if self.outcome_tensor.shape[2] > 1:
             return False
-        if self.regression_type=='naive_bayes':
-            return True
         return True
     
     def _get_targets(self, permutation):
@@ -153,13 +153,11 @@ class VoxelwiseRegression:
             if self.exchangeability_blocks is None:
                 resample_idx = np.random.permutation(regressand.shape[0])
             else:
-                block_labels = self.exchangeability_blocks.ravel()
-                unique_blocks = np.unique(block_labels)
-                resample_idx = []
-                for block in unique_blocks:
-                    block_indices = np.where(block_labels == block)[0]
-                    resample_idx.extend(block_indices)
-                resample_idx = np.array(resample_idx)
+                bl = self.exchangeability_blocks.ravel()
+                resample_idx = np.arange(regressand.shape[0])
+                for b in np.unique(bl):
+                    m = np.where(bl == b)[0]                     # rows in block b
+                    resample_idx[m] = np.random.permutation(m)   # permute only within b
             regressand = regressand[resample_idx, :, :]
             weights = weights[resample_idx]
         return regressor, regressand, weights  
@@ -186,17 +184,16 @@ class VoxelwiseRegression:
     
     def _prep_naive_bayes(self, X):
         """Precompute per-voxel pseudoinverse and (X^T X)^{-1}."""
-        n, p, v = X.shape
-        self.X_inv   = np.empty((p, n, v), float)      # pinv per voxel (p,n,v)
-        self.XTX_inv = np.empty((p, p, v), float)      # (X^T X)^{-1} per voxel
-        for vox in range(v):
+        self.X_inv   = np.empty((self.n_preds, self.n_obs, self.n_voxels), float)      # pinv per voxel (p,n,v)
+        self.XTX_inv = np.empty((self.n_preds, self.n_preds, self.n_voxels), float)      # (X^T X)^{-1} per voxel
+        for vox in range(self.n_voxels):
             self.X_inv[:, :, vox] = np.linalg.pinv(X[:, :, vox])                    # (p,n)
             XtX = X[:, :, vox].T @ X[:, :, vox]                                     # (p,p)
             self.XTX_inv[:, :, vox] = np.linalg.pinv(XtX)
         return self.X_inv, self.XTX_inv
     
     ### Statistical Helpers ###
-    def _gaussian_kernel(self, X, Y, k, h=2.0, block=512, eps=1e-300):
+    def _gaussian_kernel(self, X, Y, k, h=2.0, block=250000, eps=1e-300):
         """
         Simple healper for Gaussian kernel for feature k. 
         
@@ -221,7 +218,7 @@ class VoxelwiseRegression:
             F[obs_start:obs_stop, :] = term1 * np.maximum(term2, eps)
         return F
         
-    def _stable_logit(X, y, sample_weights=None, add_intercept=False, eps=1e-9):
+    def _stable_logit(X, y, sample_weights=None, eps=1e-9):
         # sanitize
         X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
         y = np.nan_to_num(y, nan=0.0, posinf=0.0, neginf=0.0)
@@ -339,35 +336,35 @@ class VoxelwiseRegression:
     def _get_pseudo_r2(self, Y, W, P, eps=1e-9):
         '''
         Gets MacFadden Pseudo R^2 = 1 - (LL_o / LL)
-        ll_null = (Y * np.log(P_null) + (1 - Y) * np.log(1 - P_null))
-        log-likelihood(β) = Σ_i  wᵢ[yᵢlog(pᵢ) + (1 - yᵢ) log(1 - pᵢ)]
-        These are challenging to interpret, but represent an acceptable measure of overall fit.
-        
-        Get pseudo-MSE from McFadden R2
-        MSE = ll_null / self.n_obs
-        R2 = 1 - ll_o/ll
-        where
-        ll_o = N * MSE
-        Thus 
-        ll_o / N = MSE
-        and
-        ll_o = np.sum(W * (Y * np.log(P_o) + (1 - Y) * np.log(1 - P_o)))
+        Y : (n_obs, )
+        W : (n_obs, )
+        P : (n_obs, n_vox)
         '''
-        P_null = np.clip(np.average(Y, weights=W), eps, 1 - eps) # clipped for numerical safety
-        ll_null = np.sum(W * (Y * np.log(P_null) + (1 - Y) * np.log(1 - P_null)))
-        ll_full = np.sum(W * (Y * np.log(P)      + (1 - Y) * np.log(1 - P     )))
-        MSE = ll_null / self.n_obs
-        R2 = np.array([1.0 - ll_full / ll_null])
-        return R2, MSE
+        P_null = np.clip(np.average(Y, weights=W, axis=0), eps, 1 - eps)                # (1,) <- 
+        ll_null = np.sum(W * (Y * np.log(P_null) + (1 - Y) * np.log(1 - P_null)))       # (n_obs, )
+
+        if P.ndim == 1:  # single target
+            ll_full = np.sum(W * (Y * np.log(P) + (1 - Y) * np.log(1 - P)))
+            R2 = np.array([1.0 - (ll_full / ll_null)], dtype=float)                     # (1,)
+        elif P.ndim == 2:  # voxelwise
+            ll_full = np.sum(W[:, None] * (Y[:, None] * np.log(P) +
+                                        (1 - Y)[:, None] * np.log(1 - P)), axis=0)      # (n_vox,)
+            R2 = (1.0 - (ll_full / ll_null))[None, :]                                   # (1, n_vox)
+        else:
+            raise ValueError("P must be 1D or 2D.")
+        return R2
     
     def apply_contrasts(self, XtX_inv, BETA, MSE, e=1e-6):
         """
         t = (C @ BETA) / sqrt(diag(C @ XtX_inv @ C.T) * MSE)
+        When MSE is set to 1, this provides a wald-test equivalent. 
+        For further reading, see https://www.jstor.org/stable/1912934.
         
         C : (n_contrasts, n_preds) design matrix
         BETA : (n_preds, ) or (n_preds, voxels)
         XtX_inv : (n_preds, n_preds) or (n_preds, n_preds, n_voxels)
         MSE : (1,) or (1, n_voxels)
+        
         """
         C = self.contrast_matrix
         if XtX_inv.ndim == 2: # conventional 2d matrix
@@ -376,7 +373,8 @@ class VoxelwiseRegression:
             DEN = np.sqrt(var_diag * MSE)      
         else:                 # tensor multiplcation
             NUM = np.einsum("cp,pv->cv", C, BETA)        # (n_contrasts, n_voxels) <- (n_contrasts, n_preds) @ (n_preds, n_voxels)
-            DEN = np.einsum("cp,pqv,cq->cv", C, XtX_inv, C, optimize=True)
+            DEN = np.einsum("cp,pqv,cq->cv", C, XtX_inv, C, optimize=True) # (n_contrasts, voxels) <- 
+            DEN = np.sqrt((DEN * MSE)+e)                                  # (n_contrasts, voxels) <-
         return NUM / (DEN+e)
 
     def _run_naive_bayes(self, X, Y, W, X_inv, XTX_inv, eps=1e-12):
@@ -388,7 +386,7 @@ class VoxelwiseRegression:
         Y : (n_obs, )
         W : (n_obs, )
         X_inv : (n_preds, n_obs, n_voxels)
-        XTX_inv : (n_obs, n_preds, n_voxels)
+        XTX_inv : (n_preds, n_preds, n_voxels)
         returns: WE (p,vox), T (n_contrasts,vox), R2 (McFadden) as (1,vox)
         """
         j, J = (Y == 1), (Y == 0)
@@ -397,12 +395,12 @@ class VoxelwiseRegression:
         for k in range(self.n_preds):
             num = self._gaussian_kernel(X,j,k)
             den = self._gaussian_kernel(X,J,k)
-            LL += np.log(p1*num/(p0*den+eps))                              # (n_obs, n_vox) <- (n_obs, n_vox) / (n_obs / n_vox)
-        P  = 1.0 / (1.0 + np.exp(-LL))
-        W = np.einsum("pov,ov->pv", X_inv, LL)                 # (n_obs, n_vox) <- (n_obs, n_preds, n_voxels) @ (n_obs, n_voxels)
-        PR2, MSE = self._get_pseudo_r2(Y, W, P)
-        T = self.apply_contrasts(XTX_inv, W, MSE=MSE)           # (n_contrast, n_voxels) <- 
-        return W, T, PR2
+            LL += np.log(p1*num/(p0*den+eps))                       # (n_obs, n_vox) <- (n_obs, n_vox) / (n_obs / n_vox)
+        B = np.einsum("pov,ov->pv", X_inv, LL)                      # (n_obs, n_vox) <- (n_obs, n_preds, n_voxels) @ (n_obs, n_voxels)
+        # P  = 1.0 / (1.0 + np.exp(-LL))                            # (n_obs, n_vox) # Skipping for speed
+        PR2 = np.zeros((1, self.n_voxels)) # self._get_pseudo_r2(Y, W, P)   # Skipping pseudo-R2 for speed
+        T = self.apply_contrasts(XTX_inv, B, MSE=1)                 # (n_contrast, n_voxels) <- setting MSE = 1 converts this to a Wald t-stat
+        return B, T, PR2                    
     
     def _run_logistic(self, X, Y, W, vectorize=True):
         """
@@ -414,15 +412,19 @@ class VoxelwiseRegression:
                 B, XTX_inv = self._fit_logistic(X, Y, W)
                 P = self._clipped_sigmoid(X @ B) # Gets probability, but clips for safety
             else:
-                B, XTX_inv, P = self._stable_logit(X, Y, W, True)
-            PR2, MSE = self.get_pseudo_r2(Y, W, P)
-            T = self.apply_contrasts(XTX_inv, B, MSE=MSE)
+                B, XTX_inv, P = self._stable_logit(X, Y, W)
+            PR2 = self._get_pseudo_r2(Y, W, P)
+            T = self.apply_contrasts(XTX_inv, B, MSE=1)     # setting MSE = 1 converts this to a Wald t-stat
         except Exception as e:
-            if 'SVD did not converge' in str(e):        # SVD to invert XTX fails if zero variance (empty col), rank deficiency (permutation risk), perfect separation of Y (permutation risk), or numerical overflow (prophylaxed)
-                B = 0; T = 0; PR2 = 0
+            if 'SVD did not converge' in str(e):
+                B  = np.zeros(self.n_preds)
+                T  = np.zeros(self.n_contrasts)
+                PR2= np.zeros((1,))
             else:
-                print(f"A voxelwise regression failed: {e}. \n\tIf this occurs frequently, your data is ill-conditioned. Sorry!")
-                B = None; T = None; PR2 = None
+                print(f"Error in running logistic regression: {e}")
+                B  = np.full(self.n_preds, np.nan)
+                T  = np.full(self.n_contrasts, np.nan)
+                PR2= np.full((1,), np.nan)
         return B, T, PR2
 
     def _run_precomputed_linear(self, X, Y, W, XtX_inv):
@@ -486,12 +488,12 @@ class VoxelwiseRegression:
     
     def _looped_vs_broadcast_regression(self, regressor, regressand, weights, regression_idx, permutation):
         """Attemps to do a whole-brain broadcasting if possible. Otherwise defaults to standard looped regression."""
-        BETA = np.zeros((self.n_preds, self.n_voxels))
-        T = np.zeros((self.n_contrasts, self.n_voxels))
-        R2 = np.zeros((1, self.n_voxels))  
         broadcastable = self._check_broadcastable(permutation)
         
         if not broadcastable:
+            BETA = np.zeros((self.n_preds, self.n_voxels))
+            T = np.zeros((self.n_contrasts, self.n_voxels))
+            R2 = np.zeros((1, self.n_voxels))  
             for idx in (range(self.n_voxels) if permutation else tqdm(range(self.n_voxels), desc='Running voxelwise regressions')):
                 X, Y, W = self._prep_targets(regressor, regressand, weights, idx, regression_idx)
                 BETA[:,idx], T[:,idx], R2[:,idx] = self._run_regression(X, Y, W, idx)
