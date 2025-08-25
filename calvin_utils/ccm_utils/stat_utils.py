@@ -158,6 +158,9 @@ class CorrelationCalculator:
             print("Shape of r: ", r.shape)
         return r
 
+    def _calculate_average(self, data):
+        return data.mean(axis=0).flatten()
+
     def _process_data(self, data):
         data['niftis'] = self._check_for_nans(data['niftis'])
         data['indep_var'] = self._check_for_nans(data['indep_var'])
@@ -169,6 +172,8 @@ class CorrelationCalculator:
             self.correlation_map = self._calculate_spearman_r_scipy_map(data['niftis'], data['indep_var'])
         elif self.method == 'spearman_manual':
             self.correlation_map = self._calculate_spearman_manual(data['niftis'], data['indep_var'])
+        else:
+            self.correlation_map = self._calculate_average(data['niftis'])
         return self.correlation_map
     
     def generate_correlation_maps(self, data_loader):

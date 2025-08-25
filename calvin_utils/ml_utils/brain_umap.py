@@ -433,4 +433,4 @@ class BrainUmap:
             os.makedirs(out_dir, exist_ok=True)
             self.export_cluster_report(os.path.join(out_dir, 'cluster_results.csv'))
             fig.write_html(os.path.join(out_dir, 'umap_embedding_full.html'))
-            self.plot_embedding_matplotlib(out_path=os.path.join(out_dir, "umap_3d.svg"))
+            # self.plot_embedding_matplotlib(out_path=os.path.join(out_dir, "umap_3d.svg"))

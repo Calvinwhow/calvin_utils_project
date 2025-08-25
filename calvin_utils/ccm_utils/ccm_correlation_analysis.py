@@ -23,7 +23,9 @@ class CorrelationAnalysis:
     data_dict_path : str
         Path to the dictionary containing dataset paths.
     method : str, optional
-        Method to calculate correlation ('pearson' or 'spearman'). Default is 'pearson'.
+        Method by which to combine maps in the dataset_dict. Options are ('pearson', 'spearman' and 'average'). Default is 'pearson'.
+    similarity : str, optional
+        Method to determine how to calculate the similarity matrix. Options are ("pearson" and "euclidean"). Default is "pearson"
     n_permutations : int, optional
         Number of permutations for the permutation test. Default is 1000.
     out_dir : str, optional
@@ -39,7 +41,7 @@ class CorrelationAnalysis:
         
     Methods:
     --------
-    generate_correlation_maps():
+    _prepare_map_dict():
         Generates correlation maps for all datasets.
     calculate_similarity_matrix(corr_map_dict):
         Calculates the similarity matrix from correlation maps.
@@ -67,9 +69,10 @@ class CorrelationAnalysis:
         Runs the entire correlation analysis process and returns the p-value and pairwise p-values.
     """
     
-    def __init__(self, data_dict_path, method='pearson', n_permutations=1000, out_dir=None, use_jax=False, datasets_to_flip=[], topology_command=None):
+    def __init__(self, data_dict_path, method='pearson', similarity='pearson', n_permutations=1000, out_dir=None, use_jax=False, datasets_to_flip=[], topology_command=None):
         self.data_dict_path = data_dict_path
         self.method = method
+        self.similarity = similarity
         self.n_permutations = n_permutations
         self.out_dir = out_dir
         self.corr_map_dict = None
@@ -82,9 +85,17 @@ class CorrelationAnalysis:
         self.correlation_calculator = CorrelationCalculator(method=method, verbose=False, use_jax=self.use_jax)
         self.data_loader = DataLoader(self.data_dict_path)
 
-    def generate_correlation_maps(self, permute=False, datasets_list=[]):
+    ### I/O ###
+    def save_results(self, prefix=''):
+        if self.out_dir:
+            os.makedirs(self.out_dir, exist_ok=True)
+            np.save(f'{self.out_dir}/{prefix}original_similarity_matrix.npy', self.original_similarity_matrix)
+            np.save(f'{self.out_dir}/{prefix}permuted_similarity_tensor.npy', self.permuted_similarity_tensor)
+    
+    ### Statistical Measurements ###
+    def _prepare_map_dict(self, permute=False, datasets_list=[]):
         """
-        Generates correlation maps for the specified datasets.
+        Generates a dictionary of arrays
         Args:
             permute (bool, optional): If True, permutes the independent variable before 
                 calculating correlations. Defaults to False.
@@ -98,44 +109,38 @@ class CorrelationAnalysis:
         if datasets_list == []:
             datasets_list = self.data_loader.dataset_paths_dict.keys()
     
-        corr_map_dict = {}
+        map_dict = {}
         for dataset_name in datasets_list:
-            if self.method == 'pearson':
-                data = self.data_loader.load_dataset(dataset_name)
-            elif self.method =='spearman':
+            if self.method =='spearman':
                 data = self.data_loader.load_dataset(dataset_name, nifti_type='niftis_ranked')
+            else: 
+                data = self.data_loader.load_dataset(dataset_name)
             
             if permute: np.random.shuffle(data['indep_var'])  # permute the independent variable
-            
-            self.correlation_calculator._process_data(data)
-            if dataset_name in self.datasets_to_flip:
-                self.correlation_calculator.correlation_map *= -1
-            corr_map_dict[dataset_name] = self.correlation_calculator.correlation_map
-        return corr_map_dict
+            self.correlation_calculator._process_data(data)         # Condense all patient data into a single map 
+            if dataset_name in self.datasets_to_flip:  self.correlation_calculator.correlation_map *= -1
+            map_dict[dataset_name] = self.correlation_calculator.correlation_map
+        return map_dict
     
     def align_spatial_correlation(self, matrix_1, matrix_2):
         """
         Align the spatial correlation values of each r,c pair in the given array
         to the value at index (0,0). If the correlation is negative relative to (0,0),
         multiply it by -1.
-
-        Parameters:
-        -----------
-        matrix_1 : np.ndarray
-            The similarity matrix to align.
-        matrix_2 : np.ndarray
-            The similarity matrix to align.
-
-        Returns:
-        --------
-        np.ndarray
-            The aligned similarity matrix.
         """
         r = pearsonr(x=matrix_1, y=matrix_2)[0]
         if r < 0:
             matrix_2 = matrix_2 * -1
         return matrix_1, matrix_2
-
+    
+    def _measure_similarity(self, arr1, arr2, similarity="pearson"):
+        """Measures similarity between 2 arrays"""
+        if similarity=="pearson":
+            similarity, p = pearsonr(arr1, arr2)
+        elif similarity=="euclidean":
+            similarity = np.linalg.norm(arr1 - arr2)
+            p = None
+        return similarity, p
     
     def calculate_similarity_matrix(self, corr_map_dict):
         dataset_names = list(corr_map_dict.keys())
@@ -151,27 +156,22 @@ class CorrelationAnalysis:
                 mx_2 = self.correlation_calculator._check_for_nans(mx_2, nanpolicy='remove', verbose=False)
 
                 if self.topology_command is None:
-                    similarity, _ = pearsonr(mx_1, mx_2) 
+                    similarity, _ = self._measure_similarity(mx_1, mx_2) 
                 elif self.topology_command == 'r2':
-                    similarity, _ = pearsonr(np.square(mx_1), np.square(mx_2)) 
+                    similarity, _ = self._measure_similarity(np.square(mx_1), np.square(mx_2)) 
                 elif self.topology_command == 'absval':
-                    similarity, _ = pearsonr(np.abs(mx_1), np.abs(mx_2)) 
+                    similarity, _ = self._measure_similarity(np.abs(mx_1), np.abs(mx_2)) 
                 elif self.topology_command == 'aligned':
                     mx_1, mx_2 = self.align_spatial_correlation(mx_1, mx_2)
-                    similarity, _ = pearsonr(mx_1, mx_2)
+                    similarity, _ = self._measure_similarity(mx_1, mx_2)
                 else:
                     raise ValueError(f"Error: {self.topology_command} not recognized. Please set topology_command to one of: None | 'r2' | 'absval'.")
                 similarity_matrix[i, j] = similarity
                 similarity_matrix[j, i] = similarity
 
         return similarity_matrix
-
-    def save_results(self, prefix=''):
-        if self.out_dir:
-            os.makedirs(self.out_dir, exist_ok=True)
-            np.save(f'{self.out_dir}/{prefix}original_similarity_matrix.npy', self.original_similarity_matrix)
-            np.save(f'{self.out_dir}/{prefix}permuted_similarity_tensor.npy', self.permuted_similarity_tensor)
-
+    
+    ### P-value Methods ###
     def calculate_p_value(self, method='two_tail', absolute_similarity=True):
         """
         method : str
@@ -245,94 +245,22 @@ class CorrelationAnalysis:
             print(p_val_mx)
         return p_val_mx
     
-    def matrix_heatmap(self, similarity_matrix, type='similarity', mask_half=False, output_path=None, limit=None):
-        # Possibly mask the upper half
-        if mask_half:
-            similarity_matrix = np.tril(similarity_matrix)
-
-        # Optionally replace diagonal
-        np.fill_diagonal(similarity_matrix, np.nan)
-        
-        if type == 'similarity':
-            # 1) Define a colormap with positions in [0..1]
-            #    (0.0 → red, 0.4 → black, 0.6 → black, 1.0 → green)
-            cmap = LinearSegmentedColormap.from_list(
-                'RedBlackGreen',
-                [
-                    (0, 'red'),   
-                    (0.5, 'black'),
-                    (0.5, 'black'),
-                    (1.0, 'green')
-                ]
-            )
-
-            # 2) Dynamically set vmin & vmax from data, keep center at 0
-            if limit is None:
-                minimum = np.nanmin(np.abs(similarity_matrix))
-                maximum = np.nanmax(np.abs(similarity_matrix))
-                limit = np.max(np.array([minimum, maximum]))
-                
-            norm = TwoSlopeNorm(
-                vmin= -limit,
-                vcenter=0,
-                vmax= limit
-            )
-            if bool(os.path.splitext(output_path)[1]):
-                output_file = os.path.basename(output_path)
-                output_path = os.path.dirname(output_path)
-            else:
-                output_file = 'heatmap_similarity.svg'
-
-        elif type == 'pvals':
-            # p-value colormap example
-            import matplotlib.cm as cm
-            bounds = [0, 0.0001, 0.001, 0.01, 0.05, 1]
-            cmap = cm.get_cmap('viridis', len(bounds) - 1)
-            norm = cm.colors.BoundaryNorm(bounds, cmap.N)
-            output_file = 'heatmap_pvals.svg'
-
-        else:
-            raise ValueError("Invalid input. Please choose either 'similarity' or 'pvals'.")
-
-        # If you really want the diagonal = 1 afterward:
-        np.fill_diagonal(similarity_matrix, 1)
-
-        fig, ax = plt.subplots(figsize=(8, 6))
-        sns.heatmap(
-            similarity_matrix,
-            square=True,
-            linewidths=1.0,
-            cmap=cmap,
-            norm=norm,
-            ax=ax,
-            cbar=True
-        )
-
-        ax.set_xticks(np.arange(len(self.corr_map_dict)) + 0.5)
-        ax.set_yticks(np.arange(len(self.corr_map_dict)) + 0.5)
-        ax.set_xticklabels(list(self.corr_map_dict.keys()), rotation=90)
-        ax.set_yticklabels(list(self.corr_map_dict.keys()), rotation=0)
-
-        if output_path:
-            plt.savefig(os.path.join(output_path, f'similarity-{self.observed_average}_p-{self.p_value}_{output_file}'))
-        plt.show()
-        return limit
-    
     def perform_permutation_testing(self, datasets_list=[]):
         if datasets_list == []:
             datasets_list = self.data_loader.dataset_paths_dict.keys()
             
-        self.corr_map_dict = self.generate_correlation_maps(permute=False, datasets_list=datasets_list)
+        self.corr_map_dict = self._prepare_map_dict(permute=False, datasets_list=datasets_list)
         self.original_similarity_matrix = self.calculate_similarity_matrix(self.corr_map_dict)
         
         n = len(self.corr_map_dict)
         self.permuted_similarity_tensor = np.zeros((self.n_permutations, n, n))
         
         for i in tqdm(range(self.n_permutations), desc='Running permutations'):
-            permuted_corr_map_dict = self.generate_correlation_maps(permute=True, datasets_list=datasets_list)
+            permuted_corr_map_dict = self._prepare_map_dict(permute=True, datasets_list=datasets_list)
             permuted_similarity_matrix = self.calculate_similarity_matrix(permuted_corr_map_dict)
             self.permuted_similarity_tensor[i] = permuted_similarity_matrix
 
+    ### Orchestration API ###
     def run(self, tails='two_tail', fwe=False, verbose=False):
         self.perform_permutation_testing()
         self.save_results()
@@ -469,7 +397,80 @@ class CorrelationAnalysis:
             raise ValueError('method must be either "one_tail" or "two_tail"')
 
         return p_value, observed_avg
+    
+    ### Plotting API ###
+    def matrix_heatmap(self, similarity_matrix, type='similarity', mask_half=False, output_path=None, limit=None):
+        # Possibly mask the upper half
+        if mask_half:
+            similarity_matrix = np.tril(similarity_matrix)
 
+        # Optionally replace diagonal
+        np.fill_diagonal(similarity_matrix, np.nan)
+        
+        if type == 'similarity':
+            # 1) Define a colormap with positions in [0..1]
+            #    (0.0 → red, 0.4 → black, 0.6 → black, 1.0 → green)
+            cmap = LinearSegmentedColormap.from_list(
+                'RedBlackGreen',
+                [
+                    (0, 'red'),   
+                    (0.5, 'black'),
+                    (0.5, 'black'),
+                    (1.0, 'green')
+                ]
+            )
+
+            # 2) Dynamically set vmin & vmax from data, keep center at 0
+            if limit is None:
+                minimum = np.nanmin(np.abs(similarity_matrix))
+                maximum = np.nanmax(np.abs(similarity_matrix))
+                limit = np.max(np.array([minimum, maximum]))
+                
+            norm = TwoSlopeNorm(
+                vmin= -limit,
+                vcenter=0,
+                vmax= limit
+            )
+            if bool(os.path.splitext(output_path)[1]):
+                output_file = os.path.basename(output_path)
+                output_path = os.path.dirname(output_path)
+            else:
+                output_file = 'heatmap_similarity.svg'
+
+        elif type == 'pvals':
+            # p-value colormap example
+            import matplotlib.cm as cm
+            bounds = [0, 0.0001, 0.001, 0.01, 0.05, 1]
+            cmap = cm.get_cmap('viridis', len(bounds) - 1)
+            norm = cm.colors.BoundaryNorm(bounds, cmap.N)
+            output_file = 'heatmap_pvals.svg'
+
+        else:
+            raise ValueError("Invalid input. Please choose either 'similarity' or 'pvals'.")
+
+        # If you really want the diagonal = 1 afterward:
+        np.fill_diagonal(similarity_matrix, 1)
+
+        fig, ax = plt.subplots(figsize=(8, 6))
+        sns.heatmap(
+            similarity_matrix,
+            square=True,
+            linewidths=1.0,
+            cmap=cmap,
+            norm=norm,
+            ax=ax,
+            cbar=True
+        )
+
+        ax.set_xticks(np.arange(len(self.corr_map_dict)) + 0.5)
+        ax.set_yticks(np.arange(len(self.corr_map_dict)) + 0.5)
+        ax.set_xticklabels(list(self.corr_map_dict.keys()), rotation=90)
+        ax.set_yticklabels(list(self.corr_map_dict.keys()), rotation=0)
+
+        if output_path:
+            plt.savefig(os.path.join(output_path, f'similarity-{self.observed_average}_p-{self.p_value}_{output_file}'))
+        plt.show()
+        return limit
     
 ### GENERAL NIFTI FUNCTIONS ###
                     
