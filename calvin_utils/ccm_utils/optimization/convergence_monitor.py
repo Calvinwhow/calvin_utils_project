@@ -45,8 +45,8 @@ class ConvergenceMonitor:
     # ------------------------------------------------------------------
     def check_convergence(self,
                           weights:  np.ndarray,
-                          gradient: np.ndarray | None = None,
-                          loss:     float | None      = None) -> bool:
+                          gradient: np.ndarray = None,
+                          loss:     float = None) -> bool:
         """
         Update internal state and return *True* as soon as convergence is met.
         """

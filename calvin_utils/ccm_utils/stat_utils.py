@@ -25,7 +25,7 @@ class CorrelationCalculator:
     @staticmethod
     def _check_for_nans(array, nanpolicy='remove', verbose=False):
         '''Check array for nan and raise error if present'''
-        if np.isnan(array).any():
+        if (np.isnan(array).any()) or (np.any(~np.isfinite(array))):
             if verbose:
                 print("NaN detected in the array.")
                 print(f"Array shape: {array.shape}")
@@ -40,8 +40,8 @@ class CorrelationCalculator:
                     for index in inf_indices:
                         print(f"Inf at index: {index}, value: {array[tuple(index)]}")
             if nanpolicy=='remove':
-                max_val = np.nanmax(array)
-                min_val = np.nanmin(array)
+                max_val = np.nanmax(array[np.isfinite(array)])
+                min_val = np.nanmin(array[np.isfinite(array)])
                 array = np.nan_to_num(array, nan=0, posinf=max_val, neginf=min_val)
             elif nanpolicy=='permit':
                 array = array

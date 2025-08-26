@@ -9,67 +9,25 @@ from nilearn import plotting
 from scipy.stats import spearmanr, pearsonr, rankdata
 from matplotlib.colors import TwoSlopeNorm, LinearSegmentedColormap
 import matplotlib.cm as cm
-
+import matplotlib.colors as mcolors
 from calvin_utils.ccm_utils.npy_utils import DataLoader
 from calvin_utils.ccm_utils.stat_utils import CorrelationCalculator
-from calvin_utils.ccm_utils.optimization.convergent_map_optimizer import NiftiOptimizer
 
 class CorrelationAnalysis:
-    """
-    A class to perform convergent correlation analysis on neuroimaging data.
-    
-    Attributes:
-    -----------
-    data_dict_path : str
-        Path to the dictionary containing dataset paths.
-    method : str, optional
-        Method by which to combine maps in the dataset_dict. Options are ('pearson', 'spearman' and 'average'). Default is 'pearson'.
-    similarity : str, optional
-        Method to determine how to calculate the similarity matrix. Options are ("pearson" and "euclidean"). Default is "pearson"
-    n_permutations : int, optional
-        Number of permutations for the permutation test. Default is 1000.
-    out_dir : str, optional
-        Directory to save the results. Default is None.
-    corr_map_dict : dict
-        Dictionary to store correlation maps.
-    data_loader : DataLoader
-        Instance of DataLoader to load datasets.
-    original_similarity_matrix : np.ndarray
-        Similarity matrix calculated from original data.
-    permuted_similarity_tensor : np.ndarray
-        Tensor of similarity matrices calculated from permuted data.
-        
-    Methods:
-    --------
-    _prepare_map_dict():
-        Generates correlation maps for all datasets.
-    calculate_similarity_matrix(corr_map_dict):
-        Calculates the similarity matrix from correlation maps.
-    permute_and_recompose():
-        Permutes the data and recomposes the correlation maps.
-    calculate_permuted_similarity_matrix(permuted_corr_map_dict):
-        Calculates the similarity matrix from permuted correlation maps.
-    repeat_permutation_process():
-        Repeats the permutation process to generate permuted similarity matrices.
-    save_results():
-        Saves the original and permuted similarity matrices to the output directory.
-    calculate_p_value(method='two_tail'):
-        Calculates the p-value based on the permutation test.
-    calculate_max_stat_p_values(method):
-        Calculates p-values using the maximum statistic method.
-    calculate_pairwise_p_values_uncorrected(method):
-        Calculates uncorrected pairwise p-values.
-    calculate_pairwise_p_values(method='two_tail', max_stat=False):
-        Calculates pairwise p-values, with an option for maximum statistic correction.
-    datasets_to_flip: 
-        list of dataset names. if detected, will flip multiply correlation map by -1. Use this to manually align maps to a similar topology. 
-    topology_command:
-        string. set topology_command to one of: None | 'aligned' | 'r2' | 'absval'. This method is applied to maps before measuring similarity.
-    run():
-        Runs the entire correlation analysis process and returns the p-value and pairwise p-values.
-    """
-    
     def __init__(self, data_dict_path, method='pearson', similarity='pearson', n_permutations=1000, out_dir=None, use_jax=False, datasets_to_flip=[], topology_command=None):
+        """
+        Initializes the CCMCorrelationAnalysis object with the specified parameters.
+
+        Args:
+            data_dict_path (str): Path to the data dictionary file.
+            method (str, optional): Method used for correlation calculation. Defaults to 'pearson'.
+            similarity (str, optional): Similarity metric to use. Defaults to 'pearson'.
+            n_permutations (int, optional): Number of permutations for statistical analysis. Defaults to 1000.
+            out_dir (str, optional): Output directory for results. Defaults to None.
+            use_jax (bool, optional): Whether to use JAX for computations. Defaults to False.
+            datasets_to_flip (list, optional): List of dataset names to flip during analysis. Defaults to [].
+            topology_command (Any, optional): Command or configuration for topology analysis. Defaults to None.
+        """
         self.data_dict_path = data_dict_path
         self.method = method
         self.similarity = similarity
@@ -84,7 +42,7 @@ class CorrelationAnalysis:
         self.topology_command = topology_command
         self.correlation_calculator = CorrelationCalculator(method=method, verbose=False, use_jax=self.use_jax)
         self.data_loader = DataLoader(self.data_dict_path)
-
+    
     ### I/O ###
     def save_results(self, prefix=''):
         if self.out_dir:
@@ -329,16 +287,89 @@ class CorrelationAnalysis:
             prefix = '_'.join(train_datasets) + '_'
             self.save_results(prefix=prefix)
     
+    ### Plotting API ###
+    def matrix_heatmap(self, similarity_matrix, type='similarity', mask_half=False, output_path=None, limit=None, colorscale='RedBlackGreen'):
+        # Possibly mask the upper half
+        if mask_half:
+            similarity_matrix = np.tril(similarity_matrix)
+
+        # Optionally replace diagonal
+        np.fill_diagonal(similarity_matrix, np.nan)
+        
+        if type == 'similarity':
+            # 1) Define a colormap with positions in [0..1]
+            #    (0.0 → red, 0.4 → black, 0.6 → black, 1.0 → green)
+            cmap = LinearSegmentedColormap.from_list(
+                'RedBlackGreen',
+                [
+                    (0, 'red'),   
+                    (0.5, 'black'),
+                    (0.5, 'black'),
+                    (1.0, 'green')
+                ]
+            )
+
+            # 2) Dynamically set vmin & vmax from data, keep center at 0
+            if limit is None:
+                minimum = np.nanmin(np.abs(similarity_matrix))
+                maximum = np.nanmax(np.abs(similarity_matrix))
+                limit = np.max(np.array([minimum, maximum]))
+                
+            norm = TwoSlopeNorm(
+                vmin= -limit,
+                vcenter=0,
+                vmax= limit
+            )
+            if bool(os.path.splitext(output_path)[1]):
+                output_file = os.path.basename(output_path)
+                output_path = os.path.dirname(output_path)
+            else:
+                output_file = 'heatmap_similarity.svg'
+
+        elif type == 'pvals':
+            # p-value colormap example
+            import matplotlib.cm as cm
+            bounds = [0, 0.0001, 0.001, 0.01, 0.05, 1]
+            cmap = cm.get_cmap('viridis', len(bounds) - 1)
+            norm = cm.colors.BoundaryNorm(bounds, cmap.N)
+            output_file = 'heatmap_pvals.svg'
+        
+        elif type == 'misc':
+            cmap = cm.get_cmap(colorscale)
+            vmin, vmax = np.min(similarity_matrix), np.max(similarity_matrix)
+            norm = mcolors.Normalize(vmin=vmin, vmax=vmax)
+            output_file = 'heatmap.svg'
+
+        else:
+            raise ValueError("Invalid input. Please choose either 'similarity', 'misc', or 'pvals'.")
+
+        # If you really want the diagonal = 1 afterward:
+        np.fill_diagonal(similarity_matrix, 1)
+
+        fig, ax = plt.subplots(figsize=(8, 6))
+        sns.heatmap(
+            similarity_matrix,
+            square=True,
+            linewidths=1.0,
+            cmap=cmap,
+            norm=norm,
+            ax=ax,
+            cbar=True
+        )
+
+        ax.set_xticks(np.arange(len(self.corr_map_dict)) + 0.5)
+        ax.set_yticks(np.arange(len(self.corr_map_dict)) + 0.5)
+        ax.set_xticklabels(list(self.corr_map_dict.keys()), rotation=90)
+        ax.set_yticklabels(list(self.corr_map_dict.keys()), rotation=0)
+
+        if output_path:
+            plt.savefig(os.path.join(output_path, f'similarity-{self.observed_average}_p-{self.p_value}_{output_file}'))
+        plt.show()
+        return limit
+    
+    ### Specific Comparison for P-Value Calculations ###
     @staticmethod
-    def calculate_slice_p_value(
-        observed_matrix,
-        permuted_tensor,
-        row_indices,
-        col_indices,
-        method='two_tail',
-        absolute_similarity=True,
-        remove_diagonal=True
-    ):
+    def calculate_slice_p_value(observed_matrix, permuted_tensor, row_indices, col_indices, method='two_tail', absolute_similarity=True, remove_diagonal=True):
         """
         Compute the p-value for a submatrix (slice) of the similarity matrix.
 
@@ -398,79 +429,44 @@ class CorrelationAnalysis:
 
         return p_value, observed_avg
     
-    ### Plotting API ###
-    def matrix_heatmap(self, similarity_matrix, type='similarity', mask_half=False, output_path=None, limit=None):
-        # Possibly mask the upper half
-        if mask_half:
-            similarity_matrix = np.tril(similarity_matrix)
-
-        # Optionally replace diagonal
-        np.fill_diagonal(similarity_matrix, np.nan)
+    @staticmethod
+    def example_identity_contrast(observed_matrix):
+        """
+        Given an observed_matrix (NxN), print an example contrast matrix that is just an identity matrix.
+        """
+        n = observed_matrix.shape[0]
+        contrast_matrix = np.eye(n)
+        print("Example identity contrast matrix:")
+        print(contrast_matrix)
+        return contrast_matrix
+    
+    @staticmethod
+    def contrast_outer_summation(observed_matrix, permuted_tensor, contrasts, tails='two_tail'):
+        """
+        observed_matrix : (N,N)
+        permuted_tensor : (B,N,N)
+        contrasts       : list of lists (K), each length N (e.g., [[1,1,1,1,1,1], [-1,0,0,0,1,...]])
+        tails           : 'two_tail' or 'one_tail'
+        zero_diagonal   : if True, diagonal of each outer-product weight is zeroed
+        return_pvals    : if True, return empirical p-values
+        """
+        # Prep Data
+        C = np.asarray(contrasts, dtype=float)      # (K,N)
+        if C.ndim == 1: C = C[None, :]              # allow single contrast
         
-        if type == 'similarity':
-            # 1) Define a colormap with positions in [0..1]
-            #    (0.0 → red, 0.4 → black, 0.6 → black, 1.0 → green)
-            cmap = LinearSegmentedColormap.from_list(
-                'RedBlackGreen',
-                [
-                    (0, 'red'),   
-                    (0.5, 'black'),
-                    (0.5, 'black'),
-                    (1.0, 'green')
-                ]
-            )
+        W = C[:, :, None] * C[:, None, :]                                           # (K,N,N) <- W_k = c_k ⊗ c_k  
+        T_obs  = np.einsum('ij,kij->k', observed_matrix, W, optimize=True)          # T_obs[k] = Σ_ij W_k[i,j] * S[i,j]
+        T_perm = np.einsum('bij,kij->bk', permuted_tensor, W, optimize=True)        # T_perm[b,k] = Σ_ij W_k[i,j] * S_b[i,j]
 
-            # 2) Dynamically set vmin & vmax from data, keep center at 0
-            if limit is None:
-                minimum = np.nanmin(np.abs(similarity_matrix))
-                maximum = np.nanmax(np.abs(similarity_matrix))
-                limit = np.max(np.array([minimum, maximum]))
-                
-            norm = TwoSlopeNorm(
-                vmin= -limit,
-                vcenter=0,
-                vmax= limit
-            )
-            if bool(os.path.splitext(output_path)[1]):
-                output_file = os.path.basename(output_path)
-                output_path = os.path.dirname(output_path)
-            else:
-                output_file = 'heatmap_similarity.svg'
-
-        elif type == 'pvals':
-            # p-value colormap example
-            import matplotlib.cm as cm
-            bounds = [0, 0.0001, 0.001, 0.01, 0.05, 1]
-            cmap = cm.get_cmap('viridis', len(bounds) - 1)
-            norm = cm.colors.BoundaryNorm(bounds, cmap.N)
-            output_file = 'heatmap_pvals.svg'
-
+        if tails == 'two_tail':
+            pvals = np.mean(np.abs(T_perm) >= np.abs(T_obs)[None, :], axis=0)
+        elif tails == 'one_tail':
+            pvals = np.mean(T_perm >= T_obs[None, :], axis=0)
         else:
-            raise ValueError("Invalid input. Please choose either 'similarity' or 'pvals'.")
+            raise ValueError("tails must be 'two_tail' or 'one_tail'")
 
-        # If you really want the diagonal = 1 afterward:
-        np.fill_diagonal(similarity_matrix, 1)
+        return T_obs, pvals
 
-        fig, ax = plt.subplots(figsize=(8, 6))
-        sns.heatmap(
-            similarity_matrix,
-            square=True,
-            linewidths=1.0,
-            cmap=cmap,
-            norm=norm,
-            ax=ax,
-            cbar=True
-        )
-
-        ax.set_xticks(np.arange(len(self.corr_map_dict)) + 0.5)
-        ax.set_yticks(np.arange(len(self.corr_map_dict)) + 0.5)
-        ax.set_xticklabels(list(self.corr_map_dict.keys()), rotation=90)
-        ax.set_yticklabels(list(self.corr_map_dict.keys()), rotation=0)
-
-        if output_path:
-            plt.savefig(os.path.join(output_path, f'similarity-{self.observed_average}_p-{self.p_value}_{output_file}'))
-        plt.show()
-        return limit
     
 ### GENERAL NIFTI FUNCTIONS ###
                     
