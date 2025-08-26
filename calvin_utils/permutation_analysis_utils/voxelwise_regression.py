@@ -6,6 +6,7 @@ import os
 from tqdm import tqdm
 import nibabel as nib
 import statsmodels.api as sm
+from sklearn.linear_model import LogisticRegression
 from scipy.special import expit
 
 class VoxelwiseRegression:
@@ -218,40 +219,14 @@ class VoxelwiseRegression:
             F[obs_start:obs_stop, :] = term1 * np.maximum(term2, eps)
         return F
         
-    def _stable_logit(X, y, sample_weights=None, eps=1e-9):
-        # sanitize
+    def _voxelwise_logit(X, y, W):
+        '''Simplified logistic that just works in a voxelwise looped manner'''
         X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
         y = np.nan_to_num(y, nan=0.0, posinf=0.0, neginf=0.0)
-
-        # fit with fallbacks
-        try:
-            res = sm.Logit(y, X).fit(disp=0, maxiter=200, method="newton")
-        except Exception:
-            try:
-                res = sm.Logit(y, X).fit(disp=0, maxiter=300, method="lbfgs")
-            except Exception:
-                # tiny ridge regularization fallback
-                res = sm.GLM(y, X, family=sm.families.Binomial()) \
-                    .fit_regularized(alpha=1e-6, L1_wt=0.0, maxiter=500)
-
-        B = np.asarray(res.params)
-        P = expit(X @ B)
-        P = np.clip(P, eps, 1 - eps)
-
-        # curvature weights at MLE
-        w = P * (1.0 - P)
-        if sample_weights is not None:
-            sw = np.asarray(sample_weights, float).ravel()
-            sw = np.nan_to_num(sw, nan=0.0, posinf=0.0, neginf=0.0)
-            w = w * sw
-
-        # X' W X and its (pseudo)inverse
-        XTWX = (X.T * w) @ X
-        try:
-            XTX_inv = np.linalg.inv(XTWX)
-        except np.linalg.LinAlgError:
-            XTX_inv = np.linalg.pinv(XTWX, rcond=1e-10)
-
+        lr = LogisticRegression(random_sitate=0).fit(X, y, sample_weight=W)
+        B = lr.coef_
+        XTX_inv = np.linalg.pinv( X.T @ X )
+        P = lr.predict(X)
         return B, XTX_inv, P
 
     def _clipped_sigmoid(self, a, eps=1e-9):
@@ -309,8 +284,7 @@ class VoxelwiseRegression:
                 B = B_n
                 break
             B = B_n
-        _, XtX = self._irls(X, Y, B, P, W)
-        return B, np.linalg.pinv(XtX)
+        return B, np.linalg.pinv( X.T @ X )
     
     #### Regression Methods ####
     def get_r2(self, Y, Y_HAT, W, e=1e-6):
@@ -412,7 +386,7 @@ class VoxelwiseRegression:
                 B, XTX_inv = self._fit_logistic(X, Y, W)
                 P = self._clipped_sigmoid(X @ B) # Gets probability, but clips for safety
             else:
-                B, XTX_inv, P = self._stable_logit(X, Y, W)
+                B, XTX_inv, P = self._voxelwise_logit(X, Y, W)
             PR2 = self._get_pseudo_r2(Y, W, P)
             T = self.apply_contrasts(XTX_inv, B, MSE=1)     # setting MSE = 1 converts this to a Wald t-stat
         except Exception as e:
