@@ -44,7 +44,7 @@ def _generate_report(tissue, dfs):
             \n\tsub_id_str (str): The substring that isused in the subject name in the folder path. Will split this out and retain everything from it to the folder separator.") 
     print('--------------------------------')
 
-def import_segments(base_dir, gm_pattern, wm_pattern, csf_pattern, sub_id_index=None, sub_id_str=None) -> dict:
+def import_segments(base_dir, gm_pattern, wm_pattern, csf_pattern, sub_id_index=None, sub_id_str=None, full_path=False) -> dict:
     """
     Import control dataframes for grey matter, white matter, and CSF using specified glob patterns.
 
@@ -62,6 +62,6 @@ def import_segments(base_dir, gm_pattern, wm_pattern, csf_pattern, sub_id_index=
     patterns = {'grey_matter': gm_pattern, 'white_matter': wm_pattern, 'cerebrospinal_fluid': csf_pattern}
     dfs = {}
     for tissue, pattern in patterns.items():
-        dfs[tissue] = import_matrices_from_folder(connectivity_path=base_dir, file_pattern=pattern, subject_id_index=sub_id_index, sub_id_str=sub_id_str)
+        dfs[tissue] = import_matrices_from_folder(connectivity_path=base_dir, file_pattern=pattern, subject_id_index=sub_id_index, sub_id_str=sub_id_str, full_path=full_path)
         _generate_report(tissue, dfs)
     return dfs

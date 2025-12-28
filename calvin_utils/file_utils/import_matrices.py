@@ -57,14 +57,14 @@ def get_subject_id_from_substring(file_path, substring):
     else:
         return ""
         
-def import_matrices_from_folder(connectivity_path, file_pattern='', subject_id_index=None, sub_id_str=None):
+def import_matrices_from_folder(connectivity_path, file_pattern='', subject_id_index=None, sub_id_str=None, full_path=False):
     glob_path  = os.path.join(connectivity_path, file_pattern)
     print('I will search: ', glob_path)
     globbed = glob(glob_path)
     matrix_df = pd.DataFrame({})
     seen_names = set()
     for file in globbed:
-        prelim_name = os.path.basename(file)
+        prelim_name = file if full_path else os.path.basename(file)
         if subject_id_index is not None:
             id = get_subject_id_from_path(file, subject_id_index=subject_id_index)
             name = id + '_' + os.path.basename(file)
