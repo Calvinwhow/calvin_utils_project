@@ -21,6 +21,10 @@ Calvin Utils is a Python package that provides a set of utility functions for va
 
 ## Installation
 
+### Python
+
+1. Stable on Python 3.10.18
+
 ### Installing Directly from GitHub (Simply gets you access to most recent code, but you can't edit it)
 
 You can also install the package directly from the GitHub repository:

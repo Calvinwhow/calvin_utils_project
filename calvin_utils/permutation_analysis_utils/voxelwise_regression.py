@@ -250,10 +250,7 @@ class VoxelwiseRegression:
         X_w = X * s[:, None]               # gets X weighed by ~scaled effective weights
         XtX = X_w.T @ X_w                  # XTWX = covariance matrix = observed fisher info = observed hessian!
         
-        try:
-            XtX_inv = np.linalg.inv(XtX)
-        except np.linalg.LinAlgError:
-            XtX_inv = np.linalg.pinv(XtX, rcond=1e-10)
+        XtX_inv = np.linalg.pinv(XtX, rcond=1e-10)
         
         B_n = XtX_inv @ (X_w.T @ Z_w)
         return B_n, XtX
@@ -482,7 +479,7 @@ class VoxelwiseRegression:
         return self._looped_vs_broadcast_regression(regressor, regressand, weights, regression_idx, permutation)
     
     ### P-VALUE METHODS ###
-    def _get_max_stat(self, arr, pseudo_var_smooth=True, t=99.9):
+    def _get_max_stat(self, arr, pseudo_var_smooth=True, t=95):
         """Return the 99.9th percentile of the absolute values in arr. Or just the raw maximum if pseudo_var_smooth is false (this is subject to chaotic noise)."""
         if pseudo_var_smooth:        
             return np.nanpercentile(np.abs(arr), t, axis=1)  # Calculate along rows, ignoring NaNs

@@ -13,6 +13,7 @@ from calvin_utils.ccm_utils.bounding_box import NiftiBoundingBox
 from calvin_utils.nifti_utils.generate_nifti import view_and_save_nifti
 from pathlib import Path
 from tqdm import tqdm
+import random
 
 class GiiNiiFileImport:
     """
@@ -52,22 +53,7 @@ class GiiNiiFileImport:
         A set to track unique column names.
     pattern : re.Pattern
         A compiled regular expression pattern for extracting subject IDs.
-
-    Methods:
-    --------
-    - generate_unique_column_name(file_path): Generates a unique column name based on the file path.
-    - generate_name(file_path): Generates a name based on the file path and subject ID pattern.
-    - handle_special_values(data): Handles NaNs and infinities in data without significantly biasing the distribution.
-    - import_nifti_to_numpy_array(file_path): Imports a NIFTI file and converts it to a NumPy array.
-    - import_gifti_to_numpy_array(file_path): Imports a GIFTI file and converts it to a NumPy array.
-    - identify_file_type(file_path): Identifies whether a file is NIFTI or GIFTI based on its extension.
-    - import_matrices(file_paths): Imports multiple files and stores them in the DataFrame.
-    - import_from_csv(): Imports data from a CSV file using the specified file column.
-    - import_from_folder(): Imports data from files in a folder based on the provided file pattern.
-    - detect_input_type(): Detects whether the input is a CSV file or a folder.
-    - import_data_based_on_type(): Imports data based on the detected input type.
-    - run(): Orchestrates the import process based on the input type and returns the DataFrame.
-
+        
     Note:
     -----
     This class provides a flexible way to import and process neuroimaging data in NIFTI and GIFTI formats,
@@ -213,10 +199,14 @@ class GiiNiiFileImport:
         self.bbox_mask = self.bbox.collapsed_bbox_to_mask()
         self.bbox_4d = self.bbox._stacked_data
     
-    def import_matrices(self, file_paths):
-        '''Given a list of file paths, import the data and return a dataframe with the imported files, flattened such that each column is a file.'''
+    def import_matrices(self, file_paths, duplicate_cols=True):
+        '''
+        Given a list of file paths, import the data and return a dataframe with the imported files, flattened such that each column is a file.
+        
+        Params
+        duplicate_cols (bool): if true, allows duplicate columns. Will change their names to allow this. 
+        '''
         for file_path in tqdm(file_paths, desc='Importing niftis'):
-            self.matrix_df
             path = self.identify_file_type(file_path)
             if path == 'nii':
                 data = self.import_nifti_to_numpy_array(file_path)
@@ -233,7 +223,13 @@ class GiiNiiFileImport:
             if path == 'npy':                   # The data is a whole dataframe in the numpy version, by virtue of standard NPY packaging with Calvin Howard's code.
                 self.matrix_df = data
             else:                  # Assign to the matrix in (voxels, observations) form for when voxels are observations. 
-                self.matrix_df[file_path] = data
+                if file_path in self.matrix_df.columns:
+                    id = random.randint(1, 1000000)
+                    name = file_path + str(id)
+                    print("WARNING: DUPLICATE NIFTIS ARE BEING IMPORTED INTO YOUR DATA. THIS CAN SEVERELY CONFOUND ANALYSES IF UNINTENTIONAL. \n\tCAUSE: ", file_path)
+                else:
+                    name = file_path
+                self.matrix_df[name] = data
 
 
         if len(self.affines) > 1:
@@ -246,7 +242,10 @@ class GiiNiiFileImport:
                 
         for file_path, data in self.matrix_df.items():
             if self.process_special_values:
-                data = self.handle_special_values(data)
+                try:
+                    data = self.handle_special_values(data)
+                except Exception as e:
+                    raise RuntimeError(e)
             new_name = self.generate_name(file_path)
             self.matrix_df[new_name] = data
 

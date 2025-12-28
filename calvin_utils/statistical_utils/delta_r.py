@@ -113,7 +113,10 @@ class ScatterPlot:
         if colors_list is not None:
             return sns.color_palette(colors_list, len(self.data_prep.df[self.data_prep.cohort_variable].unique()))
         else:
-            return sns.color_palette("tab10", len(self.data_prep.df[self.data_prep.cohort_variable].unique()))
+            try:
+                return sns.color_palette("tab10", len(self.data_prep.df[self.data_prep.cohort_variable].unique()))
+            except:
+                return sns.color_palette("tab10")
 
     def get_scatterplots(self,confidence_intervals):
         scatterplots_dict = {}
@@ -188,7 +191,10 @@ class BarPlot:
         if colors_list is not None:
             return sns.color_palette(colors_list, len(self.data_prep.df[self.data_prep.cohort_variable].unique()))
         else:
-            return sns.color_palette("tab10", len(self.data_prep.df[self.data_prep.cohort_variable].unique()))
+            try:
+                return sns.color_palette("tab10", len(self.data_prep.df[self.data_prep.cohort_variable].unique()))
+            except:
+                return sns.color_palette("tab10")
 
     def get_barplots(self):
         barplots_dict = {}

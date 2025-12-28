@@ -44,6 +44,8 @@ def run_spearman(X:np.array, Y:np.array, vectorize:bool = False, debug:bool = Fa
     else:
         X, Y = efficient_rank(X), efficient_rank(Y)
         RHO = run_pearson(X, Y, vectorize=True, debug=False)
+    mask = np.isfinite(RHO)
+    RHO = np.nan_to_num(RHO, nan=0, posinf=np.max(RHO[mask]),  neginf=np.min(RHO[mask]))
     return RHO
 
 def run_pearson(X:np.array, Y:np.array, vectorize:bool = True, debug:bool = False) -> np.ndarray:
@@ -90,4 +92,8 @@ def run_pearson(X:np.array, Y:np.array, vectorize:bool = True, debug:bool = Fals
             print(np.max(X_C), np.max(Y_C), NUMERATOR, DENOMINATOR)
         if debug:
             print('Correlation matrix shape: ', R.shape)
+    
+    # Remove NaNs and Infs. 
+    mask = np.isfinite(R)
+    R = np.nan_to_num(R, nan=0, posinf=np.max(R[mask]),  neginf=np.min(R[mask]))
     return R

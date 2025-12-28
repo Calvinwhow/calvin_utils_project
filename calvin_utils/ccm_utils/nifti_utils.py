@@ -259,7 +259,7 @@ class DatasetNiftiImporter(GiiNiiFileImport):
         print(f"Found {len(nifti_list)} NIfTI files.")
 
         for file_path in nifti_list:
-            importer = GiiNiiFileImport(file_path, subject_pattern='', process_special_values=True)
+            importer = GiiNiiFileImport(file_path, subject_pattern='', process_special_values=False)
             nifti_arr = importer.import_nifti_to_numpy_array(file_path)
             _, _, masked_arr = GiiNiiFileImport.mask_array(nifti_arr, mask_path=mask_path)
             if masked_arr.ndim != 2 and masked_arr.shape[0] != 1:

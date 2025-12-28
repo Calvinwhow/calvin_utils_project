@@ -29,7 +29,7 @@ class LOOCVAnalyzer(ConvergentMapGenerator):
         method : str, optional
             Correlation method: 'spearman' or 'pearson'.
         similarity : str, optional
-            Similarity metric: 'spatial_correl', 'cosine', 'avg_in_subject', or 'avg_in_convergent'.
+            Similarity metric: 'spatial_correl', 'cosine', 'avg_in_subject', or 'avg_in_target'.
         n_bootstrap : int, optional
             Number of bootstrap samples.
         roi_path : str, optional
@@ -52,7 +52,10 @@ class LOOCVAnalyzer(ConvergentMapGenerator):
         self.ylab = ylabel
         self.correlation_calculator = CorrelationCalculator(method=method, verbose=False, use_jax=False)
         self.label_dict  = {'cosine': 'Cosine Similarity', 'spatial_correl': 'Spatial Correlation', 'avg_in_subject': 'Average Damage', 'avg_in_target': 'Average Damage'}
-    
+        self.observed_x1 = None
+        self.observed_x2 = None
+        self.observed_y  = None
+        
     ### Helpers ###
     def _cosine_similarity(self, a, b):
         """Calculate the cosine similarity between two vectors."""
@@ -214,7 +217,7 @@ class LOOCVAnalyzer(ConvergentMapGenerator):
             similarities = [self._pearson(arr, convergent_map) for arr in test_arr]
         elif self.similarity == 'avg_in_subject':
             similarities = [self._dot_in_arr(arr, convergent_map) for arr in test_arr]
-        elif self.similarity == 'avg_in_convergent':
+        elif self.similarity == 'avg_in_target':
             similarities = [self._dot_in_cvgt(arr, convergent_map) for arr in test_arr]
         else:
             raise ValueError("Invalid similarity measure (self.similarity). Please choose 'cosine', 'spatial_correl', 'avg_in_subject', 'avg_in_convergent'")
@@ -240,175 +243,24 @@ class LOOCVAnalyzer(ConvergentMapGenerator):
     
     def run(self):
         self.results = self.perform_loocv(forest_plot=False)
-        
-      
-    ### OUTDATED ###    
-    ### Forest Plotting Functions ###
-    def run_forest_plot(self):
-        self.perform_loocv(self, forest_plot=True)
-        self.results_df = self.results_to_dataframe()
-        self.results_df.to_csv(f'{self.out_dir}/loocv_results.csv')
-        
-        
-    def _calculate_confidence_interval(self, data, ci_method='percentile', alpha=0.05, return_mean=False):
-        """
-        Calculate confidence intervals (CI) for a given distribution.
-        
-        Parameters:
-            data (array-like): Input distribution of data.
-            ci_method (str): Method to calculate CI. Options are 'analytic' or 'percentile'.
-            alpha (float): Significance level for the CI (default is 0.05 for a 95% CI).
-        
-        Returns:
-            tuple: (CI lower bound, CI upper bound, Mean)
-        """        
-        # Calculate the mean
-        mean = np.mean(data)
-        if ci_method == 'analytic':
-            # Use the analytic method (normal approximation)
-            z = 1.96  # For 95% CI
-            std_err = np.std(data, ddof=1) / np.sqrt(len(data))  # Standard error of the mean
-            ci_lower = mean - z * std_err
-            ci_upper = mean + z * std_err
-        
-        elif ci_method == 'percentile':
-            # Use the percentile method
-            ci_lower = np.percentile(data, 100 * (alpha / 2))
-            ci_upper = np.percentile(data, 100 * (1 - alpha / 2))
-        elif ci_method == 'hybrid':
-            ci_lower_1 = np.percentile(data, 100 * (alpha / 2))
-            ci_upper_1 = np.percentile(data, 100 * (1 - alpha / 2))
-            
-            # Use the analytic method (normal approximation)
-            z = 1.96  # For 95% CI
-            std_err = np.std(data, ddof=1) / np.sqrt(len(data))  # Standard error of the mean
-            ci_lower_2 = mean - z * std_err
-            ci_upper_2 = mean + z * std_err
-            
-            ci_lower = ( ci_lower_1 + ci_lower_2 ) / 2
-            ci_upper = ( ci_upper_1 + ci_upper_2 ) / 2
-            
-        else:
-            raise ValueError("ci_method must be 'analytic' or 'percentile'")
-        if return_mean:
-            return ci_lower, ci_upper, mean
-        else:
-            return ci_lower, ci_upper, data[0]
-    def correlate_similarity_with_outcomes(self, similarities, indep_var, dataset_name='test_data', gen_scatterplot=True):
-        """Correlate similarity values with independent variables and calculate confidence intervals."""
-        resampled_r = []
-        for _ in tqdm(range(self.n_bootstrap), 'Running bootstraps'):
-            resampled_indices = np.random.choice(len(similarities), len(similarities), replace=True)
-            if _ == 0:      # on the first iteration, store the actual data
-                resampled_similarities = np.array(similarities)
-                resampled_indep_var = np.array(indep_var)
-            else:
-                resampled_similarities = np.array(similarities)[resampled_indices]
-                resampled_indep_var = np.array(indep_var)[resampled_indices]
-            
-            if self.method == 'spearman':
-                resampled_r.append(spearmanr(resampled_similarities.flatten(), resampled_indep_var.flatten())[0])
-            else:
-                resampled_r.append(pearsonr(resampled_similarities.flatten(), resampled_indep_var.flatten())[0])
-        
-        ci_lower, ci_upper, mean_r = self._calculate_confidence_interval(resampled_r)
-        return ci_lower, ci_upper, mean_r
     
-    def compute_fixed_effects_by_group(self, group_dict):
-        """
-        Perform an inverse-variance fixed-effect meta-analysis of mean R-values by group.
-
-        Parameters
-        ----------
-        group_dict : dict
-            Dictionary mapping each dataset_name -> group_name, e.g.:
-            {
-            'dataset_1': 'group1',
-            'dataset_2': 'group2',
-            'dataset_3': 'group1'
-            }
-
-        Returns
-        -------
-        pd.DataFrame
-            DataFrame with columns ['Group', 'R_Fixed', 'CI_Lower', 'CI_Upper'],
-            where each row represents the meta-analytic fixed-effect of R
-            among all datasets in that group.
-        """
-
-        def fisher_z(r):
-            return 0.5 * log((1 + r) / (1 - r))
-
-        def inv_fisher_z(z):
-            return (exp(2*z) - 1) / (exp(2*z) + 1)
-
-        def prep_group_dict(group_dict):
-            if group_dict == {}:
-                for dataset in self.corr_map_dict.keys():
-                    group_dict[dataset] = 'Overall Fixed Effects'
-            return group_dict
-        
-        # 0. Prepare the dict mapping datasets to fixed effects groups
-        group_dict = prep_group_dict(group_dict)
-
-        # 1. Gather mean R and sample sizes by group
-        #    (We assume self.results lines up with self.corr_map_dict.keys())
-        grouped_z_and_w = {}
-        for (dataset_name, (_, _, mean_r)) in zip(self.corr_map_dict.keys(), self.results):
-            group = group_dict.get(dataset_name)
-            if group is None:
-                continue  # Skip datasets not in the dictionary
-
-            # Convert mean R to Fisher's Z
-            z = fisher_z(mean_r)
-
-            # Sample size (for variance of Fisher's Z)
-            n = len(self.data_loader.load_dataset(dataset_name)['indep_var'])
-            w = n - 3  # weight = inverse variance = (n-3)
-
-            grouped_z_and_w.setdefault(group, []).append((z, w))
-
-        # 2. Perform meta-analysis for each group
-        rows = []
-        for group, z_w_pairs in grouped_z_and_w.items():
-            # Weighted average in Z-space
-            sum_w = sum(w for _, w in z_w_pairs)
-            z_fixed = sum(z * w for z, w in z_w_pairs) / sum_w
-
-            # Variance and standard error
-            var_fixed = 1.0 / sum_w
-            se_fixed = sqrt(var_fixed)
-
-            # 95% CI in Z-space
-            z_lower, z_upper = z_fixed - 1.96 * se_fixed, z_fixed + 1.96 * se_fixed
-
-            # Back-transform to correlation
-            r_fixed = inv_fisher_z(z_fixed)
-            r_lower = inv_fisher_z(z_lower)
-            r_upper = inv_fisher_z(z_upper)
-
-            rows.append([group, r_lower, r_upper, r_fixed])
-
-        # 3. Return a one-row-per-group DataFrame
-        return pd.DataFrame(rows, columns=['Dataset', 'CI Lower', 'CI Upper', 'Mean R'])
-
+    ### Map/ROI Comparison Module ###
     def _shuffle_for_roi_comparison(self, niftis, indep_var, method):
         if method == "bootstrap":
             idx = np.random.choice(len(niftis), size=len(niftis), replace=True)
+            return niftis[idx], indep_var[idx].flatten()
         elif method == "permutation":
-            idx = np.arange(len(niftis))
-            np.random.shuffle(idx)
-        elif method =="observed":
-            idx = np.arange(len(niftis))
+            idx = np.random.permutation(len(indep_var))
+            return niftis, indep_var[idx].flatten()
+        elif method == "observed":
+            return niftis, indep_var.flatten()
         else:
-            raise ValueError("Invalid method. Please choose 'bootstrap' or 'permutation'.")
-        sub_niftis = niftis[idx]
-        sub_indep_var = indep_var[idx].flatten()
-        return sub_niftis, sub_indep_var
+            raise ValueError("Invalid method.")
     
     def _compute_r_differences(self, roi1_map, roi2_map, dataset_names, method, n_iter, delta_r2, spearman=True):
-        all_r_diffs = {}
-        for dataset_name in dataset_names:
+        """If given multiple datasets, this will average each resample across datasets"""
+        all_r_diffs = np.zeros((n_iter, len(dataset_names)))                                # prefille to enable insertion
+        for idx, dataset_name in enumerate(dataset_names):
             r_diffs = []
             iter_count = 0
             with tqdm(total=n_iter) as pbar:
@@ -417,9 +269,10 @@ class LOOCVAnalyzer(ConvergentMapGenerator):
                     test_niftis = CorrelationCalculator._check_for_nans(data['niftis'], nanpolicy='remove', verbose=False)
                     test_indep_var = CorrelationCalculator._check_for_nans(data['indep_var'], nanpolicy='remove', verbose=False)
                     sub_niftis, sub_indep_var = self._shuffle_for_roi_comparison(test_niftis, test_indep_var, method)
+                    
                     if self.similarity == 'cosine':
-                        sim1 = [self.cosine_similarity(n, roi1_map) for n in sub_niftis]
-                        sim2 = [self.cosine_similarity(n, roi2_map) for n in sub_niftis]
+                        sim1 = [self._cosine_similarity(n, roi1_map) for n in sub_niftis]
+                        sim2 = [self._cosine_similarity(n, roi2_map) for n in sub_niftis]
                     else:
                         sim1 = [pearsonr(n.flatten(), roi1_map.flatten())[0] for n in sub_niftis]
                         sim2 = [pearsonr(n.flatten(), roi2_map.flatten())[0] for n in sub_niftis]
@@ -432,6 +285,7 @@ class LOOCVAnalyzer(ConvergentMapGenerator):
                         mask2 = ~np.isnan(sim2) & ~np.isnan(sub_indep_var)
                         stat1 = pearsonr(np.array(sim1)[mask1], np.array(sub_indep_var)[mask1])[0]
                         stat2 = pearsonr(np.array(sim2)[mask2], np.array(sub_indep_var)[mask2])[0]
+                        
                     if np.isnan(stat1) or np.isnan(stat2):
                         continue  # skip this iteration and do not increment iter_count
                     if delta_r2:
@@ -441,51 +295,30 @@ class LOOCVAnalyzer(ConvergentMapGenerator):
                     delta = stat1 - stat2
                     r_diffs.append(delta)
                     for roi, stat in zip(['roi1', 'roi2'], [stat1, stat2]):
-                        self.r_values[roi].append(stat)
+                        if method=='observed':      # careful not to overwrite existing self.r_values from resampling.
+                            self.observed_r_values[roi].append(stat)
+                            self.observed_x1 = np.array(sim1)
+                            self.observed_x2 = np.array(sim2)
+                            self.observed_y  = np.array(sub_indep_var)
+                        else:
+                            self.r_values[roi].append(stat)
                     iter_count += 1
                     pbar.update(1)
-            all_r_diffs[dataset_name] = r_diffs
-        return all_r_diffs
+            all_r_diffs[:, idx] = r_diffs                                               # assign all the r_diffs to this this column
+        return all_r_diffs                                                              # shape (resamples, datasets)
         
     def _calculate_probability(self, all_r_diffs, roi1_map, roi2_map, dataset_names, method, delta_r2):
         """Calculate the probability based on the method (bootstrap or permutation)"""
-        p_vals = {}
         print(f"Below results used delta explained variance (r-squared): {delta_r2}")
-        if method == "bootstrap":
-            print("Checking the probability that ROI 1 outperforms ROI 2 by comparing # of times it outperformed it in")
-            for dataset_name, diffs in all_r_diffs.items():
-                pval = np.mean(np.array(diffs) > 0)
-                print(f'{dataset_name} \n    -Avg delta value: {np.mean(np.array(diffs))}| Probability Roi 1 is generally superior: {pval}.')
-                p_vals[dataset_name] = pval
-        elif method == "permutation":
-            print("Checking the probability that ROI 1 outperforms ROI 2 using permutation testing.")
-            observed_diffs = self._compute_r_differences(roi1_map, roi2_map, dataset_names, method='observed', n_iter=1, delta_r2=delta_r2)
-            for dataset_name, diffs in all_r_diffs.items():
-                obsv_diff = observed_diffs[dataset_name]
-                pval = np.mean(np.array(diffs) > obsv_diff)
-                print(f'{dataset_name} \n    -delta value: {obsv_diff}| permutation p-value: {pval}.')
-                p_vals[dataset_name] = pval
-            overall_pval = np.mean(np.mean(list(all_r_diffs.values()), axis=1) > np.mean(list(observed_diffs.values())))
-            print(f'Overall permutation p-value: {overall_pval}')
-        else:
-            raise ValueError("method must be 'bootstrap' or 'permutation'")
-        
-        
-        # --- Overall bootstrap p-value and average delta ---
-        if method == "bootstrap":
-            diff_matrix = np.array(list(all_r_diffs.values()))  # shape: (n_datasets, n_iter)
-            mean_diffs = np.mean(diff_matrix, axis=0)           # shape: (n_iter,)
-            overall_pval = np.mean(mean_diffs > 0)
-            print(f"Overall bootstrap:\n    avg delta R = {np.mean(mean_diffs):.4f}, Probability ROI 1 is generally superior = {overall_pval:.4f}")
-
-        # --- Overall permutation p-value and average delta ---
-        elif method == "permutation":
-            observed_mean_diff = np.mean(list(observed_diffs.values()))
-            diff_matrix = np.array(list(all_r_diffs.values()))  # shape: (n_datasets, n_iter)
-            mean_diffs = np.mean(diff_matrix, axis=0)           # shape: (n_iter,)
-            overall_pval = np.mean(mean_diffs > observed_mean_diff)
-            print(f"Overall permutation:\n     observed avg delta R = {observed_mean_diff:.4f}, p = {overall_pval:.4f}")
-        return p_vals
+        observed_diffs = self._compute_r_differences(roi1_map, roi2_map, dataset_names, method='observed', n_iter=1, delta_r2=delta_r2) # shape: (1, datasets)
+        if method == "bootstrap":                               # Overall bootstrap p-value and average delta ---
+            overall_pval = np.mean(all_r_diffs > 0)             # shape (1, datasets), where value in each row corresponds to significance of that dataset
+            print(f"Overall bootstrap:\n    avg delta R = {np.mean(all_r_diffs):.4f}, Probability ROI 1 is generally superior = {overall_pval:.4f}")
+        elif method == "permutation":                           # Overall permutation p-value and average delta 
+            overall_pval = np.mean(all_r_diffs > observed_diffs)        # shape (resamples, datasets)
+            avg_observed = np.mean(observed_diffs)                      # shape (1, datasets), where value in each row corresponds to significance of that dataset
+            print(f"Overall permutation:\n     observed avg delta R = {avg_observed:.4f}, p = {overall_pval:.4f}")
+        return overall_pval, observed_diffs
     
     def compare_roi_correlations(self, roi1, roi2, method="bootstrap", n_iter=10000, delta_r2=True, seed=None):
         """Compare the correlation of two ROI maps with outcome variables using bootstrap or permutation test"""
@@ -496,6 +329,7 @@ class LOOCVAnalyzer(ConvergentMapGenerator):
         
         dataset_names = list(self.corr_map_dict.keys())
         self.r_values = {'roi1': [], 'roi2': []}
+        self.observed_r_values = {'roi1': [], 'roi2': []}
         
         all_r_diffs = self._compute_r_differences(roi1_map, roi2_map, dataset_names, method, n_iter, delta_r2)
         self.prob = self._calculate_probability(all_r_diffs, roi1_map, roi2_map, dataset_names, method, delta_r2)

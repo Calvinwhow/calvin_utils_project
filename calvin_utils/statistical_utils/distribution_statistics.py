@@ -3,7 +3,7 @@ import numpy as np
 from scipy.stats import t
 import numpy as np
 from tqdm import tqdm
-from statannotations.Annotator import Annotator
+# from statannotations.Annotator import Annotator
 import seaborn as sns
 import matplotlib.pyplot as plt
 import pandas as pd
@@ -195,19 +195,19 @@ def plot_with_annotation(dataframe, col1, col2, xlabel, ylabel, test_type, colou
     # Plot with seaborn
     sns.boxplot(x='Group', y='Value', data=data, ax=ax)
     
-    # Add annotations
-    annotator = Annotator(ax=ax,
-                          data=data,
-                          x='Group',
-                          y='Value',
-                          pairs=pairs,
-                          test=test_type,
-                          text_format='full',
-                          loc='inside',
-                          verbose=2)
+    # # Add annotations
+    # annotator = Annotator(ax=ax,
+    #                       data=data,
+    #                       x='Group',
+    #                       y='Value',
+    #                       pairs=pairs,
+    #                       test=test_type,
+    #                       text_format='full',
+    #                       loc='inside',
+    #                       verbose=2)
     
-    # Configure and annotate
-    _, corrected_results = annotator.configure(test=test_type, comparisons_correction="bonferroni").apply_and_annotate()
+    # # Configure and annotate
+    # _, corrected_results = annotator.configure(test=test_type, comparisons_correction="bonferroni").apply_and_annotate()
     
     # Label and show plot
     plt.xlabel(xlabel)

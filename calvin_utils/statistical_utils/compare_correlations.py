@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from itertools import combinations
-from scipy.stats import norm, pearsonr, spearmanr
+from scipy.stats import norm, pearsonr, spearmanr, ttest_ind
 from calvin_utils.ccm_utils.resampling_plot import ResampleVisualizer
 
 class CompareCorrelations:
@@ -98,6 +98,9 @@ class CompareCorrelations:
             return spearmanr(iv, dv)[0]
         else:
             return pearsonr(iv, dv)[0]
+        
+    def _get_ttest(self, arr1, arr2):
+        print("t-test results of bootstrap: \n\t", ttest_ind(arr1, arr2))
 
     ### Bootstrapping Logic ###
     def _bootstrap_correlations(self, iv_df: pd.DataFrame):
@@ -115,6 +118,7 @@ class CompareCorrelations:
         for model_a, model_b in combinations(self.corr_dist.keys(), 2):
             corr_a = self.corr_dist[model_a]
             corr_b = self.corr_dist[model_b]
+            self._get_ttest(corr_a,corr_b)
             resample_viz = ResampleVisualizer(stat_array_1=corr_a,stat_array_2=corr_b, model1_name=model_a, model2_name=model_b, stat='Correlation', out_dir=out_dir)
             resample_viz.draw()
             

@@ -358,21 +358,18 @@ class SpecificityAnalyzer:
             fig.tight_layout()
             if self.out_dir:
                 os.makedirs(self.out_dir, exist_ok=True)
-                fig.savefig(os.path.join(self.out_dir, f'specificity_iv{iv + 1}.svg'), format='svg')
+                fig.savefig(os.path.join(self.out_dir, f'specificity_{self.cols[iv+1]}.svg'), format='svg')
             plt.show()
             plt.close(fig)
 
     ### Orchestrator ### 
     def run(self, n_resamples=1000, scale=0.85):
-        # 1 - get correlation of each col of X to every col of Y. Sum R values within the columns defined by y_labels. 
-        CORR  = self._run_correlation()
-        AUC   = self._get_AUC(CORR)
-        # 2 - Repeat step 1 with bootstrapped or permuted data 1000 times. 
-        AUC_p = self._run_loop(n_resamples)
-        # 3 - compare observed AUC and permuted AUC
-        p     = self._get_p_values(AUC, AUC_p)
-        # 4 - For each col of X, plot the R-values from step 1, but coloured/grouped by y_label and sorted in a gaussian fashion within each label group. 
-        self._plot(CORR, scale)
+        
+        CORR  = self._run_correlation()                 # 1 - get correlation of each col of X to every col of Y. Sum R values within the columns defined by y_labels. 
+        AUC   = self._get_AUC(CORR)     
+        AUC_p = self._run_loop(n_resamples)             # 2 - Repeat step 1 with bootstrapped or permuted data 1000 times. 
+        p     = self._get_p_values(AUC, AUC_p)          # 3 - compare observed AUC and permuted AUC
+        self._plot(CORR, scale)                         # 4 - For each col of X, plot the R-values from step 1, but coloured/grouped by y_label and sorted in a gaussian fashion within each label group. 
 
 
 def get_column_labels(df):

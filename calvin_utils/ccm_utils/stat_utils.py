@@ -121,13 +121,17 @@ class CorrelationCalculator:
 
     def _calculate_spearman_r_map(self, niftis, indep_var):
         """Calculate the Spearman rank-order correlation coefficient for each voxel in a fully vectorized manner."""
-        # Rank the data using scipy.stats.rankdata to handle ties
         if self.use_jax:
             return calculate_spearman_r_map_jax(niftis, indep_var)
         
-        # self.ranked_niftis = self._rankdata(niftis, vectorize=True) # TODO--ONLY RANK THE NIFTIS THE FIRST TIME. THEN, STORE THE RANK AND USE IT IN FUTURE! ?OVERWRITE THE ORIGINAL NIFTI DATA W/ RANKS
-        ranked_indep_var = rankdata(indep_var)[:, np.newaxis]
-        rho = self._calculate_pearson_r_map(niftis, ranked_indep_var)
+        ranked_indep_var = rankdata(indep_var)[:, np.newaxis] #scipy.stats.rankdata  handles ties well
+        try:
+            rho = self._calculate_pearson_r_map(niftis, ranked_indep_var)
+        except Exception as e:
+            if ("shapes" in str(e)) and ("not aligned: " in str(e)):
+                raise RuntimeError("Shape alginment error. You have a mismatched number of niftis and observations. Repeat Notebook 01 ensuring same number of observations in each matrix.")
+            else:
+                raise RuntimeError(f"Error: {e}")
         return rho
 
     def _calculate_pearson_r_map(self, niftis, indep_var):
