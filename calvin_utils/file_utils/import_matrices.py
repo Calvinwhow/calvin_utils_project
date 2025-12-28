@@ -64,7 +64,7 @@ def import_matrices_from_folder(connectivity_path, file_pattern='', subject_id_i
     matrix_df = pd.DataFrame({})
     seen_names = set()
     for file in globbed:
-        prelim_name = file if full_path else os.path.basename(file)
+        prelim_name = os.path.basename(file)
         if subject_id_index is not None:
             id = get_subject_id_from_path(file, subject_id_index=subject_id_index)
             name = id + '_' + os.path.basename(file)
@@ -73,6 +73,8 @@ def import_matrices_from_folder(connectivity_path, file_pattern='', subject_id_i
             name = id + '_' + os.path.basename(file)
         elif prelim_name in seen_names:
             name = prelim_name
+        elif full_path: 
+            name = file
         else:
             name = os.path.basename(file)
 
