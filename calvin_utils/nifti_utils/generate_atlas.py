@@ -115,6 +115,13 @@ class AtlasAggregator:
 
         if not labels:
             raise ValueError("3D atlas conversion requires a labels .txt with indices.")
+        data_int = np.rint(data)
+        if not np.allclose(data, data_int):
+            warnings.warn(
+                "3D atlas contains non-integer values; rounding to nearest integer.",
+                RuntimeWarning,
+            )
+        data_int = data_int.astype(int)
         label_indices = sorted({label["index"] for label in labels})
         max_idx = max(label_indices)
         out_data = np.zeros(data.shape + (max_idx - self.index_base + 1,), dtype=np.float32)
@@ -123,7 +130,7 @@ class AtlasAggregator:
             vol_idx = idx - self.index_base
             if vol_idx < 0 or vol_idx >= out_data.shape[3]:
                 continue
-            out_data[:, :, :, vol_idx] = (data == idx).astype(np.float32)
+            out_data[:, :, :, vol_idx] = (data_int == idx).astype(np.float32)
 
         out_img = nib.Nifti1Image(out_data, atlas_img.affine, atlas_img.header)
         output_dir = pathlib.Path(output_dir) if output_dir else self.atlas_nii.parent
