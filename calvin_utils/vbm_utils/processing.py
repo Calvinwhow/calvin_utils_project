@@ -44,9 +44,9 @@ def calculate_z_scores(ctrl: pd.DataFrame, pat: pd.DataFrame) -> pd.DataFrame:
     z_arr = (pat_arr - mean) / std               # broadcasting (N_vox × N_pat)
     return pd.DataFrame(z_arr, index=pat.index, columns=pat.columns), mean, std
 
-def process_tissue(df, tiv):
+def process_tissue(df, tiv, threshold=0.2):
     '''This will threshold the probabilities and normalize by TIV.'''
-    df = threshold_probabilities(df, threshold=0.2)  # Thresholding control probabilities
+    df = threshold_probabilities(df, threshold=threshold)  # Thresholding control probabilities
     return df / tiv[np.newaxis, :]  # Normalize by TIV
 
 def process_atrophy(data_dict, ctrl_dict):
